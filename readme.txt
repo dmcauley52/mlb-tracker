@@ -1,1 +1,4 @@
 This is a mlb cycle tracker app
+
+supabase anaon key
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5samtlbmVrdW1nZm56cW5jY25jIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzczMDQ2MjYsImV4cCI6MjA5Mjg4MDYyNn0.CCE4kST-yJXAA6l4Pfoxn-mntzLltUl9jUY81o56vmk
