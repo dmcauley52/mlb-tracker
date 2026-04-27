@@ -2,6 +2,7 @@
   "buildCommand": "sed -i \"s|%SB_URL%|$SB_URL|g; s|%SB_KEY%|$SB_KEY|g\" index.html",
   "outputDirectory": ".",
   "rewrites": [
-    { "source": "/(.*)", "destination": "/index.html" }
+    { "source": "/api/(.*)", "destination": "/api/$1" },
+    { "source": "/(.*)",     "destination": "/index.html" }
   ]
 }
