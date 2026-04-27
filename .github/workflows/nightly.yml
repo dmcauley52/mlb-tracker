@@ -9,6 +9,8 @@ on:
         options:
           - nightly
           - backfill
+          - nightly-pitchers
+          - backfill-pitchers
   schedule:
     - cron: '0 7 * * *'
 
@@ -33,19 +35,26 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
       - name: Run backfill (full season) — pitchers
-        if: github.event.inputs.mode == 'backfill'
+        if: >
+          github.event.inputs.mode == 'backfill' ||
+          github.event.inputs.mode == 'backfill-pitchers'
         run: python backfill_pitcher_stats.py
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
       - name: Run nightly fetch (yesterday only) — batters
-        if: github.event.inputs.mode != 'backfill'
+        if: >
+          github.event.inputs.mode == 'nightly' ||
+          github.event.inputs.mode == ''
         run: python fetch_stats.py
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
       - name: Run nightly fetch (yesterday only) — pitchers
-        if: github.event.inputs.mode != 'backfill'
+        if: >
+          github.event.inputs.mode == 'nightly' ||
+          github.event.inputs.mode == 'nightly-pitchers' ||
+          github.event.inputs.mode == ''
         run: python fetch_pitcher_stats.py
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
