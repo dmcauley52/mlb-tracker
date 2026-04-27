@@ -5,7 +5,7 @@ import time
 from dotenv import load_dotenv
 load_dotenv()
 
-SEASON = 2025
+SEASON = 2026
 MIN_AT_BATS = 100
 
 conn = psycopg2.connect(os.getenv("DATABASE_URL"))
