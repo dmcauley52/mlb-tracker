@@ -1,5 +1,5 @@
 {
-  "buildCommand": "sed -i \"s|%SB_URL%|$SB_URL|g; s|%SB_KEY%|$SB_KEY|g\" index.html",
+  "buildCommand": "sed -i \"s|%SB_URL%|$SB_URL|g; s|%SB_KEY%|$SB_KEY|g; s|%DEFAULT_TEAM%|$DEFAULT_TEAM|g\" index.html",
   "outputDirectory": ".",
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/$1" },
