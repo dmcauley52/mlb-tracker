@@ -14,7 +14,7 @@ cur = conn.cursor()
 
 yesterday = date.today() - timedelta(days=1)
 
-# Get qualified players
+print("Fetching qualified batters...")
 leaders = statsapi.get("stats", {
     "stats": "season",
     "group": "hitting",
@@ -34,7 +34,7 @@ for entry in leaders.get("stats", [{}])[0].get("splits", []):
             "name": player.get("fullName")
         })
 
-print(f"Fetching yesterday's stats for {len(qualified)} qualified players...")
+print(f"Fetching yesterday for {len(qualified)} players...")
 
 for player in qualified:
     pid = player["id"]
@@ -43,28 +43,34 @@ for player in qualified:
         stats = statsapi.player_stat_data(
             pid, group="hitting", type="gameLog"
         )
+
+        # Get position once per player
+        player_info = statsapi.get("person", {"personId": pid})
+        position = player_info.get("people", [{}])[0].get("primaryPosition", {}).get("abbreviation", "")
+
         for game in stats.get("stats", []):
             s = game["stats"]
             gdate = game.get("date")
             if gdate != str(yesterday):
                 continue
-        # Get team and position from the game entry
-        team = game.get("team", {}).get("name", "")
-        position = game.get("position", {}).get("abbreviation", "")
-        
-        cur.execute("""
-            INSERT INTO player_gamelogs
-            (player_id, player_name, game_date, season, at_bats, hits,
-             home_runs, rbi, batting_avg, ops, team, position)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            ON CONFLICT (player_id, game_date) DO NOTHING
-        """, (pid, name, gdate, SEASON,
-              s.get("atBats", 0), s.get("hits", 0),
-              s.get("homeRuns", 0), s.get("rbi", 0),
-              s.get("avg", 0), s.get("ops", 0),
-              team, position))
+
+            team = game.get("team", {}).get("name", "")
+
+            cur.execute("""
+                INSERT INTO player_gamelogs
+                (player_id, player_name, game_date, season, at_bats, hits,
+                 home_runs, rbi, batting_avg, ops, team, position)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (player_id, game_date) DO NOTHING
+            """, (pid, name, gdate, SEASON,
+                  s.get("atBats", 0), s.get("hits", 0),
+                  s.get("homeRuns", 0), s.get("rbi", 0),
+                  s.get("avg", 0), s.get("ops", 0),
+                  team, position))
+
         conn.commit()
         time.sleep(0.3)
+
     except Exception as e:
         print(f"  ✗ {name}: {e}")
         conn.rollback()
