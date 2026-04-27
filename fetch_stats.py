@@ -1,7 +1,9 @@
-import statsapi
 import psycopg2
 import os
 import time
+import json
+import urllib.request
+import statsapi
 from datetime import date, timedelta
 from dotenv import load_dotenv
 load_dotenv()
@@ -13,7 +15,9 @@ conn = psycopg2.connect(os.getenv("DATABASE_URL"))
 cur = conn.cursor()
 
 yesterday = date.today() - timedelta(days=1)
+yesterday_str = str(yesterday)
 
+# ── Get qualified batters ──────────────────────────────────────────────
 print("Fetching qualified batters...")
 leaders = statsapi.get("stats", {
     "stats": "season",
@@ -21,11 +25,11 @@ leaders = statsapi.get("stats", {
     "season": SEASON,
     "playerPool": "ALL",
     "limit": 500,
-    "fields": "stats,splits,stat,atBats,player,id,fullName"
 })
 
+splits = leaders.get("stats", [{}])[0].get("splits", [])
 qualified = []
-for entry in leaders.get("stats", [{}])[0].get("splits", []):
+for entry in splits:
     ab = entry.get("stat", {}).get("atBats", 0)
     player = entry.get("player", {})
     if ab >= MIN_AT_BATS:
@@ -34,27 +38,28 @@ for entry in leaders.get("stats", [{}])[0].get("splits", []):
             "name": player.get("fullName")
         })
 
-print(f"Fetching yesterday for {len(qualified)} players...")
+print(f"Fetching {yesterday_str} stats for {len(qualified)} players...")
 
+# ── Fetch game logs via direct API call ───────────────────────────────
 for player in qualified:
     pid = player["id"]
     name = player["name"]
     try:
-        stats = statsapi.player_stat_data(
-            pid, group="hitting", type="gameLog"
-        )
+        url = f"https://statsapi.mlb.com/api/v1/people/{pid}/stats?stats=gameLog&group=hitting&season={SEASON}"
+        with urllib.request.urlopen(url) as response:
+            raw = json.loads(response.read().decode())
 
-        # Get position once per player
-        player_info = statsapi.get("person", {"personId": pid})
-        position = player_info.get("people", [{}])[0].get("primaryPosition", {}).get("abbreviation", "")
+        game_splits = raw.get("stats", [{}])[0].get("splits", [])
 
-        for game in stats.get("stats", []):
-            s = game["stats"]
+        for game in game_splits:
             gdate = game.get("date")
-            if gdate != str(yesterday):
+            if gdate != yesterday_str:
                 continue
 
+            s = game.get("stat", {})
             team = game.get("team", {}).get("name", "")
+            positions = game.get("positionsPlayed", [{}])
+            position = positions[0].get("abbreviation", "") if positions else ""
 
             cur.execute("""
                 INSERT INTO player_gamelogs
@@ -77,4 +82,4 @@ for player in qualified:
 
 cur.close()
 conn.close()
-print(f"Nightly update complete for {yesterday}")
+print(f"Nightly update complete for {yesterday_str}")
