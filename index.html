@@ -496,7 +496,7 @@
 
       const loadRoster = useCallback(async()=>{
         if(dataSource==="demo"){
-          setRoster(DEMO_PLAYERS); setSelectedPlayer(DEMO_PLAYERS[0]); setRosterError(""); return;
+          setRoster(DEMO_PLAYERS); setSelectedPlayer(DEMO_PLAYERS.find(p=>teamFilter&&teamFilter!=='ALL'&&p.team===teamFilter)||DEMO_PLAYERS[0]); setRosterError(""); return;
         }
         if(dataSource==="mlb"){
           setRoster(Object.keys(MLB_IDS).map(name=>({player_name:name,team:"MLB"}))); setSelectedPlayer(null); setRosterError(""); return;
@@ -511,7 +511,7 @@
         try{
           const players = await fetchRoster(sbUrl,sbKey);
           if(!players.length) throw new Error("No players returned — check table name and RLS policies.");
-          setRoster(players); setSelectedPlayer(players[0]);
+          setRoster(players); setSelectedPlayer(players.find(p=>teamFilter&&teamFilter!=='ALL'&&p.team===teamFilter)||players[0]);
         }catch(e){ setRosterError(e.message); setRoster([]); setSelectedPlayer(null); }
         setRosterLoading(false);
       },[dataSource,sbUrl,sbKey]);
@@ -592,7 +592,7 @@
         fetchRoster(sbUrl,sbKey)
           .then(players=>{
             if(!players.length) throw new Error("No players returned — check table name and RLS policies.");
-            setRoster(players); setSelectedPlayer(players[0]);
+            setRoster(players); setSelectedPlayer(players.find(p=>teamFilter&&teamFilter!=='ALL'&&p.team===teamFilter)||players[0]);
           })
           .catch(e=>{ setRosterError(e.message); setRoster([]); setSelectedPlayer(null); })
           .finally(()=>setRosterLoading(false));
