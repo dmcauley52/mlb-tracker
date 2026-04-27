@@ -1,0 +1,12 @@
+on:
+  schedule:
+    - cron: '0 7 * * *'  # 2AM EST = 7AM UTC
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - run: pip install MLB-StatsAPI pandas psycopg2-binary python-dotenv
+      - run: python fetch_stats.py
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
