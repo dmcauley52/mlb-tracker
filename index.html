@@ -14,6 +14,7 @@
        Falls back to empty string if not set (localStorage then takes over). -->
   <meta name="sb-url" content="%SB_URL%">
   <meta name="sb-key" content="%SB_KEY%">
+  <meta name="default-team" content="%DEFAULT_TEAM%">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #0f172a; color: #f1f5f9; font-family: Inter, sans-serif; }
@@ -454,7 +455,7 @@
     };
 
     // ── Credential resolution: env vars (build-time) → localStorage (runtime) ──
-    // Vercel replaces %SB_URL% / %SB_KEY% in the HTML at build time.
+    // Vercel replaces %SB_URL% / %SB_KEY% / %DEFAULT_TEAM% in the HTML at build time.
     // If the placeholder wasn't replaced (local dev or missing env var) the
     // value starts with "%" and we fall back to localStorage.
     function readMeta(name) {
@@ -475,7 +476,7 @@
       const [rosterLoading,setRosterLoading] = useState(false);
       const [rosterError,setRosterError]     = useState("");
       const [sortBy,setSortBy]         = useState("name");
-      const [teamFilter,setTeamFilter] = useState("ALL");
+      const [teamFilter,setTeamFilter] = useState(()=>{ const t=readMeta("default-team"); return t||"ALL"; });
       const [search,setSearch]         = useState("");
       const [selectedPlayer,setSelectedPlayer] = useState(null);
       const [gameData,setGameData]     = useState([]);
@@ -622,10 +623,44 @@
       const fetchInsight = async()=>{
         setAiLoading(true);
         const last10=gameData.slice(-10), l10H=last10.reduce((a,g)=>a+g.hits,0), l10AB=last10.reduce((a,g)=>a+g.ab,0), l10HR=last10.reduce((a,g)=>a+g.hr,0);
-        const ps=PHASE_CONFIG.map(p=>`${p.name}: AVG ${phaseAvg(gameData,p.name,"avg")}, OPS ${phaseAvg(gameData,p.name,"ops")}`).join("\n");
-        const ssLine=seasonStats?`Season ${SEASON}: AVG ${seasonStats.avg}, OPS ${seasonStats.ops}, HR ${seasonStats.hr}, RBI ${seasonStats.rbi}, G ${seasonStats.games}`:`${gameData.length} games sampled`;
-        const predLine=currentPred?`Prediction score: ${currentPred.score}/99 (${currentPred.tier}) — ${currentPred.label}`:"";
-        const prompt=`You are a baseball analytics AI. Analyze the 28-day cycle for ${selectedPlayer?.player_name}:\n\n${ssLine}\nLast 10: ${l10H}H / ${l10AB}AB, ${l10HR} HR\n${predLine}\n\nPhase averages:\n${ps}\n\nCurrent: ${currentPhase?.name} phase, day ${currentCycleDay+1}/${CYCLE_LENGTH}\n\n3-4 sentences: current cycle assessment, strongest/weakest phase, fantasy recommendation, bold 7-day prediction.`;
+        const last5=gameData.slice(-5), l5H=last5.reduce((a,g)=>a+g.hits,0), l5AB=last5.reduce((a,g)=>a+g.ab,0);
+
+        const ssLine=seasonStats
+          ?`Season ${SEASON}: AVG ${seasonStats.avg}, OPS ${seasonStats.ops}, HR ${seasonStats.hr}, RBI ${seasonStats.rbi}, G ${seasonStats.games}`
+          :`${gameData.length} games sampled`;
+
+        // FFT cycle data — use detected cycles if available, fall back to fixed 28-day
+        let cycleSection;
+        if(cycleAnalysis && cycleAnalysis.dominantCycles.length > 0){
+          const cycles = cycleAnalysis.dominantCycles
+            .map((c,i)=>`  Cycle ${i+1}: ${c.periodDays}-day period, ${c.pctVariance}% of variance, amplitude ${c.amplitude.toFixed(3)}`)
+            .join("\n");
+          // Forecast direction over next 7 days
+          const fv = cycleAnalysis.forecastValues.slice(0,7);
+          const fStart = fv[0], fEnd = fv[fv.length-1];
+          const fSlope = fEnd - fStart;
+          const fDir = fSlope > 0.015 ? "strongly rising" : fSlope > 0.005 ? "rising" : fSlope < -0.015 ? "strongly falling" : fSlope < -0.005 ? "falling" : "flat";
+          const fAvg = (fv.reduce((a,b)=>a+b,0)/fv.length + cycleAnalysis.mean).toFixed(3);
+          cycleSection=`Detected performance cycles (DFT analysis, R²=${cycleAnalysis.r2.toFixed(2)}):\n${cycles}\nForecast next 7 games: trend is ${fDir}, projected avg ~${fAvg}`;
+        } else {
+          const ps=PHASE_CONFIG.map(p=>`  ${p.name}: AVG ${phaseAvg(gameData,p.name,"avg")}, OPS ${phaseAvg(gameData,p.name,"ops")}`).join("\n");
+          cycleSection=`Fixed 28-day cycle phase averages (insufficient data for DFT):\n${ps}\nCurrent: ${currentPhase?.name} phase, day ${currentCycleDay+1}/${CYCLE_LENGTH}`;
+        }
+
+        const predLine=currentPred?`\nPerformance prediction score: ${currentPred.score}/99 (${currentPred.tier}) — ${currentPred.label}`:"";
+
+        const prompt=`You are a baseball analytics AI specializing in time-series performance cycle analysis.
+
+Player: ${selectedPlayer?.player_name} (${seasonStats?.team||selectedPlayer?.team||""})
+${ssLine}
+Last 10 games: ${l10H}H / ${l10AB}AB (.${l10AB>0?Math.round(l10H/l10AB*1000).toString().padStart(3,"0"):"000"}), ${l10HR} HR
+Last 5 games:  ${l5H}H / ${l5AB}AB (.${l5AB>0?Math.round(l5H/l5AB*1000).toString().padStart(3,"0"):"000"})
+${predLine}
+
+${cycleSection}
+
+Based specifically on the detected cycle periods and forecast direction above — not generic baseball intuition — provide 3-4 sentences covering: what the dominant cycle(s) tell us about this player's rhythm, where they are in that cycle right now, a concrete fantasy/lineup recommendation for the next 3-5 days, and one bold prediction grounded in the cycle data.`;
+
         try{
           const res=await fetch("/api/scout",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prompt})});
           if(!res.ok){ const e=await res.text(); throw new Error(`API ${res.status}: ${e}`); }
