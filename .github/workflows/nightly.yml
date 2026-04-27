@@ -7,7 +7,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: pip install MLB-StatsAPI pandas psycopg2-binary python-dotenv
+      - run: pip install mlb-statsapi pandas psycopg2-binary python-dotenv
       - run: python fetch_stats.py
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
