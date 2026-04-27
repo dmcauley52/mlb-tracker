@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 SEASON = 2026
-MIN_AT_BATS = 100
+MIN_AT_BATS = 20
 
 conn = psycopg2.connect(os.getenv("DATABASE_URL"))
 cur = conn.cursor()
