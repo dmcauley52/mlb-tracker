@@ -4,8 +4,8 @@ from datetime import date, timedelta
 SEASON = 2026
 MIN_AT_BATS = 20
 
-# ── Test 1: See if any qualified batters come back ─────────────────────
-print("=== Fetching ALL splits and filtering by AT BATS ===")
+# ── Test 1: Qualified batters ──────────────────────────────────────────
+print("=== Fetching ALL splits ===")
 leaders = statsapi.get("stats", {
     "stats": "season",
     "group": "hitting",
@@ -15,7 +15,7 @@ leaders = statsapi.get("stats", {
 })
 
 splits = leaders.get("stats", [{}])[0].get("splits", [])
-print(f"Total splits returned by API: {len(splits)}")
+print(f"Total splits returned: {len(splits)}")
 
 qualified = []
 for entry in splits:
@@ -29,30 +29,27 @@ for entry in splits:
         })
 
 print(f"Players with {MIN_AT_BATS}+ AB: {len(qualified)}")
-print("\nFirst 10 qualified players:")
-for p in qualified[:10]:
-    print(f"  {p['name']}: {p['ab']} AB")
 
-# ── Test 2: Check yesterday's date format ─────────────────────────────
-yesterday = date.today() - timedelta(days=1)
-print(f"\n=== Yesterday's date string ===")
-print(f"  Python date: {yesterday}")
-print(f"  As string:   {str(yesterday)}")
-
-# ── Test 3: Pull one known player's game log and print raw dates ───────
+# ── Test 2: Print RAW game entry to see all available keys ────────────
 if qualified:
     pid = qualified[0]["id"]
     name = qualified[0]["name"]
-    print(f"\n=== Game log dates for {name} ===")
+    print(f"\n=== Raw game log entry for {name} ===")
     stats = statsapi.player_stat_data(pid, group="hitting", type="gameLog")
     games = stats.get("stats", [])
-    print(f"Total games returned: {len(games)}")
-    for game in games[-5:]:
-        print(f"  date: '{game.get('date')}' | AB: {game['stats'].get('atBats')}")
+    print(f"Total games in log: {len(games)}")
+
+    if games:
+        print("\n--- FULL RAW ENTRY (last game) ---")
+        import json
+        print(json.dumps(games[-1], indent=2))
+
+        print("\n--- TOP LEVEL KEYS in each game entry ---")
+        print(list(games[-1].keys()))
+    else:
+        print("⚠️  No games returned for this player")
 else:
-    print("\n⚠️  No qualified players found — API may not have 2026 data yet")
-    print("Trying with MIN_AT_BATS = 1...")
-    for entry in splits[:5]:
-        ab = entry.get("stat", {}).get("atBats", 0)
-        name = entry.get("player", {}).get("fullName", "Unknown")
-        print(f"  {name}: {ab} AB")
+    print("⚠️  No qualified players — printing raw split sample:")
+    import json
+    if splits:
+        print(json.dumps(splits[0], indent=2))
