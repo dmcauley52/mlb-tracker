@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MLB Cycle Analyzer</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/recharts@2.10.0/umd/Recharts.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0f172a; color: #f1f5f9; font-family: Inter, sans-serif; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useCallback } = React;
+    const { AreaChart, Area, XAxis, YAxis, CartesianGrid,
+            Tooltip, ResponsiveContainer, ReferenceLine } = Recharts;
+
+    const CYCLE_LENGTH = 28;
+    const PHASE_CONFIG = [
+      { name:"Peak",      start:0,  end:6,  color:"#22c55e", desc:"High energy, strong output" },
+      { name:"Ovulation", start:7,  end:13, color:"#3b82f6", desc:"Sustained performance window" },
+      { name:"Luteal",    start:14, end:20, color:"#f59e0b", desc:"Slight decline, still capable" },
+      { name:"Recovery",  start:21, end:27, color:"#ef4444", desc:"Rest & reset phase" },
+    ];
+    const getPhase = d => PHASE_CONFIG.find(p => d >= p.start && d <= p.end);
+
+    const DEMO_PLAYERS = [
+      { player_name:"Aaron Judge",     team:"New York Yankees" },
+      { player_name:"Shohei Ohtani",   team:"Los Angeles Dodgers" },
+      { player_name:"Freddie Freeman", team:"Los Angeles Dodgers" },
+      { player_name:"Mookie Betts",    team:"Los Angeles Dodgers" },
+      { player_name:"Gunnar Henderson",team:"Baltimore Orioles" },
+      { player_name:"Yordan Alvarez",  team:"Houston Astros" },
+    ];
+
+    const genDemo = (name, seed) => {
+      const rng = s => { let x = Math.sin(s)*10000; return x-Math.floor(x); };
+      return Array.from({length:90},(_,i)=>{
+        const d = new Date(); d.setDate(d.getDate()-(89-i));
+        const cyc = i % CYCLE_LENGTH;
+        const ph = getPhase(cyc);
+        const avg = Math.max(0.1,Math.min(0.5,
+          0.260+0.040*Math.sin((2*Math.PI*i)/CYCLE_LENGTH+seed)+
+          (rng(seed*i+1)-0.5)*0.08));
+        return {
+          date: d.toLocaleDateString("en-US",{month:"short",day:"numeric"}),
+          cycleDay:cyc, phase:ph.name, phaseColor:ph.color,
+          avg:+avg.toFixed(3),
+          ops:+(avg*1.7+rng(seed*i+2)*0.15).toFixed(3),
+          hits:Math.floor(rng(seed*i+3)*3)+(ph.name==="Peak"?1:0),
+          hr:rng(seed*i+4)>0.88?1:0,
+        };
+      });
+    };
+
+    const phaseAvg = (games,ph,stat) => {
+      const f = games.filter(g=>g.phase===ph);
+      return f.length?(f.reduce((s,g)=>s+g[stat],0)/f.length).toFixed(3):"—";
+    };
+
+    const CustomTooltip = ({active,payload}) => {
+      if(!active||!payload?.length) return null;
+      const d = payload[0].payload;
+      return (
+        <div style={{background:"#1e293b",border:`1px solid ${d.phaseColor}`,borderRadius:8,padding:"10px 14px",fontSize:12}}>
+          <div style={{color:"#94a3b8",marginBottom:4}}>{d.date}</div>
+          <div style={{color:d.phaseColor,fontWeight:700,marginBottom:6}}>📍 {d.phase} (Day {d.cycleDay+1})</div>
+          <div style={{color:"#f1f5f9"}}>AVG: <b>{d.avg}</b> · OPS: <b>{d.ops}</b></div>
+          <div style={{color:"#f1f5f9"}}>Hits: <b>{d.hits}</b> · HR: <b>{d.hr}</b></div>
+        </div>
+      );
+    };
+
+    async function sbFetch(url,key,path){
+      const r = await fetch(`${url}/rest/v1/${path}`,{
+        headers:{apikey:key,Authorization:`Bearer ${key}`}
+      });
+      if(!r.ok) throw new Error(`Supabase ${r.status}: ${await r.text()}`);
+      return r.json();
+    }
+
+    async function fetchRoster(url,key){
+      const rows = await sbFetch(url,key,
+        "player_gamelogs?select=player_name,team&order=team.asc,player_name.asc&limit=2000");
+      const seen = new Set();
+      return rows.filter(r=>{
+        const k=`${r.player_name}||${r.team}`;
+        if(seen.has(k)) return false;
+        seen.add(k); return true;
+      });
+    }
+
+    async function fetchPlayerGames(url,key,playerName){
+      const since = new Date(); since.setDate(since.getDate()-90);
+      const iso = since.toISOString().split("T")[0];
+      const enc = encodeURIComponent(playerName);
+      return sbFetch(url,key,
+        `player_gamelogs?player_name=eq.${enc}&game_date=gte.${iso}&order=game_date.asc&select=*`);
+    }
+
+    function transformRows(rows){
+      return rows.map((row,i)=>{
+        const cyc = i % CYCLE_LENGTH;
+        const ph = getPhase(cyc);
+        const avg = parseFloat(row.batting_avg)||0;
+        return {
+          date: new Date(row.game_date).toLocaleDateString("en-US",{month:"short",day:"numeric"}),
+          cycleDay:cyc, phase:ph.name, ph
