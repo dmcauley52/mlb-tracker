@@ -305,17 +305,23 @@
 
       const loadRoster = useCallback(async()=>{
         if(dataSource==="demo"){
-          setRoster(DEMO_PLAYERS); setSelectedPlayer(DEMO_PLAYERS[0]); return;
+          setRoster(DEMO_PLAYERS); setSelectedPlayer(DEMO_PLAYERS[0]); setRosterError(""); return;
         }
         if(dataSource==="mlb"){
-          setRoster(Object.keys(MLB_IDS).map(name=>({player_name:name,team:"MLB"}))); setSelectedPlayer(null); return;
+          setRoster(Object.keys(MLB_IDS).map(name=>({player_name:name,team:"MLB"}))); setSelectedPlayer(null); setRosterError(""); return;
         }
-        if(!sbUrl||!sbKey) return;
+        // Supabase / live mode
+        if(!sbUrl||!sbKey){
+          setRoster([]); setSelectedPlayer(null);
+          setRosterError("Enter your Supabase URL and API key above, then click Connect.");
+          return;
+        }
         setRosterLoading(true); setRosterError("");
         try{
           const players = await fetchRoster(sbUrl,sbKey);
-          setRoster(players); if(players.length) setSelectedPlayer(players[0]);
-        }catch(e){ setRosterError(e.message); setRoster(DEMO_PLAYERS); setSelectedPlayer(DEMO_PLAYERS[0]); }
+          if(!players.length) throw new Error("No players returned — check table name and RLS policies.");
+          setRoster(players); setSelectedPlayer(players[0]);
+        }catch(e){ setRosterError(e.message); setRoster([]); setSelectedPlayer(null); }
         setRosterLoading(false);
       },[dataSource,sbUrl,sbKey]);
 
@@ -384,7 +390,20 @@
         setMlbSearching(false);
       };
 
-      const saveCredentials = ()=>{ localStorage.setItem("sbUrl",sbUrl); localStorage.setItem("sbKey",sbKey); loadRoster(); };
+      const saveCredentials = ()=>{
+        localStorage.setItem("sbUrl",sbUrl);
+        localStorage.setItem("sbKey",sbKey);
+        // Force an immediate fetch using the current input values rather than
+        // waiting for state to propagate through useCallback's stale closure.
+        setRosterLoading(true); setRosterError("");
+        fetchRoster(sbUrl,sbKey)
+          .then(players=>{
+            if(!players.length) throw new Error("No players returned — check table name and RLS policies.");
+            setRoster(players); setSelectedPlayer(players[0]);
+          })
+          .catch(e=>{ setRosterError(e.message); setRoster([]); setSelectedPlayer(null); })
+          .finally(()=>setRosterLoading(false));
+      };
 
       const currentCycleDay = gameData.length?gameData[gameData.length-1].cycleDay:0;
       const currentPhase = getPhase(currentCycleDay);
