@@ -1,11 +1,12 @@
 import statsapi
+import json
 from datetime import date, timedelta
 
 SEASON = 2026
 MIN_AT_BATS = 20
 
 # ── Test 1: Qualified batters ──────────────────────────────────────────
-print("=== Fetching ALL splits ===")
+print("=== Fetching qualified batters ===")
 leaders = statsapi.get("stats", {
     "stats": "season",
     "group": "hitting",
@@ -15,8 +16,6 @@ leaders = statsapi.get("stats", {
 })
 
 splits = leaders.get("stats", [{}])[0].get("splits", [])
-print(f"Total splits returned: {len(splits)}")
-
 qualified = []
 for entry in splits:
     ab = entry.get("stat", {}).get("atBats", 0)
@@ -30,26 +29,28 @@ for entry in splits:
 
 print(f"Players with {MIN_AT_BATS}+ AB: {len(qualified)}")
 
-# ── Test 2: Print RAW game entry to see all available keys ────────────
+# ── Test 2: Call API directly for game log with dates ─────────────────
 if qualified:
     pid = qualified[0]["id"]
     name = qualified[0]["name"]
-    print(f"\n=== Raw game log entry for {name} ===")
-    stats = statsapi.player_stat_data(pid, group="hitting", type="gameLog")
-    games = stats.get("stats", [])
-    print(f"Total games in log: {len(games)}")
+    print(f"\n=== Direct API game log for {name} (id: {pid}) ===")
 
-    if games:
-        print("\n--- FULL RAW ENTRY (last game) ---")
-        import json
-        print(json.dumps(games[-1], indent=2))
+    # Call the API directly instead of using the wrapper
+    raw = statsapi.get("person_stats", {
+        "personId": pid,
+        "stats": "gameLog",
+        "group": "hitting",
+        "season": SEASON,
+    })
 
-        print("\n--- TOP LEVEL KEYS in each game entry ---")
-        print(list(games[-1].keys()))
+    print("\n--- TOP LEVEL KEYS ---")
+    print(list(raw.keys()))
+
+    splits2 = raw.get("stats", [{}])[0].get("splits", [])
+    print(f"\nTotal game splits: {len(splits2)}")
+
+    if splits2:
+        print("\n--- FULL RAW LAST GAME ENTRY ---")
+        print(json.dumps(splits2[-1], indent=2))
     else:
-        print("⚠️  No games returned for this player")
-else:
-    print("⚠️  No qualified players — printing raw split sample:")
-    import json
-    if splits:
-        print(json.dumps(splits[0], indent=2))
+        print("⚠️  No splits returned")
