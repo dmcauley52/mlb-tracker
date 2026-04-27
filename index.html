@@ -162,9 +162,19 @@
       return r.json();
     }
     async function fetchRoster(url,key){
-      const rows = await sbFetch(url,key,"player_gamelogs?select=player_name,team&order=team.asc,player_name.asc&limit=2000");
+      // Paginate in chunks of 1000 until we get fewer rows than requested,
+      // then deduplicate client-side. This handles databases of any size without
+      // relying on a fixed limit that silently truncates results.
+      const PAGE = 1000;
+      let offset = 0, all = [], page;
+      do {
+        page = await sbFetch(url, key,
+          `player_gamelogs?select=player_name,team&order=player_name.asc,team.asc&limit=${PAGE}&offset=${offset}`);
+        all = all.concat(page);
+        offset += PAGE;
+      } while (page.length === PAGE);
       const seen = new Set();
-      return rows.filter(r=>{const k=`${r.player_name}||${r.team}`;if(seen.has(k))return false;seen.add(k);return true;});
+      return all.filter(r=>{const k=`${r.player_name}||${r.team}`;if(seen.has(k))return false;seen.add(k);return true;});
     }
     async function fetchPlayerGames(url,key,playerName){
       const since = new Date(); since.setDate(since.getDate()-90);
