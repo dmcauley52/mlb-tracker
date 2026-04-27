@@ -20,7 +20,7 @@ season = yesterday.year
 
 for name, pid in PLAYER_IDS.items():
     stats = statsapi.player_stat_data(
-        pid, group="hitting", type="gameLog", season=season
+        pid, group="hitting", type="gameLog"
     )
     for game in stats.get("stats", []):
         s = game["stats"]
