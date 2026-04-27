@@ -66,26 +66,29 @@
       if (!gameData || gameData.length < 3) return { score:50, label:"Insufficient data", tier:"neutral", breakdown:{phaseScore:0,trendScore:0,opsScore:0,momentumScore:0,matchupScore:0}, opponents:[] };
 
       // 1. Cycle phase score using FFT analysis when available, else fixed 28-day (0-30)
-      let phaseScore = 15; // default neutral
+      let phaseScore = 15;
+      let phaseLabel = "current cycle"; // used in label below — set in each branch
       const analysis = analyzePlayerCycles(gameData);
       if (analysis && analysis.forecastValues.length > 0) {
-        // Use gradient of forecast: rising = peak approaching, falling = trough approaching
         const f = analysis.forecastValues;
-        const trend3 = f.slice(0,3).reduce((a,b)=>a+b,0)/3;
+        const trend3  = f.slice(0,3).reduce((a,b)=>a+b,0)/3;
         const trend3b = f.slice(1,4).reduce((a,b)=>a+b,0)/3;
-        const slope = trend3b - trend3;
-        // Absolute forecast level vs mean also matters
-        const level = f[0] - analysis.mean;
-        phaseScore = slope > 0.010  ? 30 : slope > 0.004 ? 26
-                   : slope > 0       ? 20 : slope > -0.004 ? 14
-                   : slope > -0.010  ? 8  : 4;
-        // Bonus: if forecast is above mean
+        const slope   = trend3b - trend3;
+        const level   = f[0] - analysis.mean;
+        phaseScore = slope > 0.010 ? 30 : slope > 0.004 ? 26
+                   : slope > 0     ? 20 : slope > -0.004 ? 14
+                   : slope > -0.010 ? 8 : 4;
         if (level > 0.015) phaseScore = Math.min(30, phaseScore + 4);
+        const topPeriod = analysis.dominantCycles[0]?.periodDays;
+        phaseLabel = topPeriod
+          ? (slope > 0 ? `rising ${topPeriod}d cycle` : `falling ${topPeriod}d cycle`)
+          : (slope > 0 ? "rising cycle" : "falling cycle");
       } else {
-        const lastCycleDay  = gameData[gameData.length - 1]?.cycleDay ?? 0;
-        const nextCycleDay  = (lastCycleDay + 1) % CYCLE_LENGTH;
-        const nextPhase     = getPhase(nextCycleDay);
-        phaseScore = nextPhase.name === "Peak" ? 30 : nextPhase.name === "Ovulation" ? 22 : nextPhase.name === "Luteal" ? 12 : 4;
+        const lastCycleDay = gameData[gameData.length - 1]?.cycleDay ?? 0;
+        const nextCycleDay = (lastCycleDay + 1) % CYCLE_LENGTH;
+        const np = getPhase(nextCycleDay);
+        phaseScore = np.name === "Peak" ? 30 : np.name === "Ovulation" ? 22 : np.name === "Luteal" ? 12 : 4;
+        phaseLabel = np.name + " phase";
       }
 
       // 2. Last-5 batting avg trend (0-25)
@@ -109,12 +112,12 @@
 
       const score = Math.min(99, Math.max(1, phaseScore + trendScore + opsScore + momentumScore + matchupScore));
       const tier  = score >= 75 ? "hot" : score >= 55 ? "warm" : score >= 35 ? "neutral" : "cold";
-      const label = score >= 75 ? `Fire in ${nextPhase.name} phase — strong outlook`
-                  : score >= 55 ? `Trending up entering ${nextPhase.name} phase`
-                  : score >= 35 ? `Steady in ${nextPhase.name} phase`
-                  : `Cooling off — ${nextPhase.name} phase`;
+      const label = score >= 75 ? `Fire — ${phaseLabel}, strong outlook`
+                  : score >= 55 ? `Trending up — ${phaseLabel}`
+                  : score >= 35 ? `Steady — ${phaseLabel}`
+                  : `Cooling off — ${phaseLabel}`;
 
-      return { score, tier, label, nextPhase, opponents: sched.opponents,
+      return { score, tier, label, phaseLabel, opponents: sched.opponents,
                breakdown: { phaseScore, trendScore, opsScore, momentumScore, matchupScore } };
     }
 
@@ -395,7 +398,7 @@
       if(!pred) return null;
       const color = TIER_COLOR[pred.tier];
       const rows = [
-        ["Cycle phase",        pred.breakdown.phaseScore,    30, pred.nextPhase?.name],
+        ["Cycle phase",        pred.breakdown.phaseScore,    30, pred.phaseLabel||null],
         ["Last-5 avg trend",   pred.breakdown.trendScore,    25, null],
         ["Season OPS",         pred.breakdown.opsScore,      20, null],
         ["10-game momentum",   pred.breakdown.momentumScore, 15, null],
