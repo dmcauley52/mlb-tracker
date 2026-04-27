@@ -9,6 +9,11 @@
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
   <script src="https://unpkg.com/recharts@2.10.0/umd/Recharts.js"></script>
+  <!-- Vercel injects these at build time via vercel.json rewrites or _headers.
+       Values come from NEXT_PUBLIC_SB_URL and NEXT_PUBLIC_SB_KEY env vars.
+       Falls back to empty string if not set (localStorage then takes over). -->
+  <meta name="sb-url" content="%SB_URL%">
+  <meta name="sb-key" content="%SB_KEY%">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #0f172a; color: #f1f5f9; font-family: Inter, sans-serif; }
@@ -448,10 +453,23 @@
       );
     };
 
+    // ── Credential resolution: env vars (build-time) → localStorage (runtime) ──
+    // Vercel replaces %SB_URL% / %SB_KEY% in the HTML at build time.
+    // If the placeholder wasn't replaced (local dev or missing env var) the
+    // value starts with "%" and we fall back to localStorage.
+    function readMeta(name) {
+      const el = document.querySelector(`meta[name="${name}"]`);
+      const val = el ? el.getAttribute("content") : "";
+      return (val && !val.startsWith("%")) ? val : "";
+    }
+    function getCredential(metaName, lsKey) {
+      return localStorage.getItem(lsKey) || readMeta(metaName) || "";
+    }
+
     // ── App ───────────────────────────────────────────────────────────────────
     function App(){
-      const [sbUrl,setSbUrl]           = useState(localStorage.getItem("sbUrl")||"");
-      const [sbKey,setSbKey]           = useState(localStorage.getItem("sbKey")||"");
+      const [sbUrl,setSbUrl]           = useState(()=>getCredential("sb-url","sbUrl"));
+      const [sbKey,setSbKey]           = useState(()=>getCredential("sb-key","sbKey"));
       const [dataSource,setDataSource] = useState("demo");
       const [roster,setRoster]         = useState([]);
       const [rosterLoading,setRosterLoading] = useState(false);
@@ -609,9 +627,11 @@
         const predLine=currentPred?`Prediction score: ${currentPred.score}/99 (${currentPred.tier}) — ${currentPred.label}`:"";
         const prompt=`You are a baseball analytics AI. Analyze the 28-day cycle for ${selectedPlayer?.player_name}:\n\n${ssLine}\nLast 10: ${l10H}H / ${l10AB}AB, ${l10HR} HR\n${predLine}\n\nPhase averages:\n${ps}\n\nCurrent: ${currentPhase?.name} phase, day ${currentCycleDay+1}/${CYCLE_LENGTH}\n\n3-4 sentences: current cycle assessment, strongest/weakest phase, fantasy recommendation, bold 7-day prediction.`;
         try{
-          const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:prompt}]})});
-          const d=await res.json(); setAiInsight(d.content?.[0]?.text||"No insight returned.");
-        }catch{ setAiInsight("Error calling AI."); }
+          const res=await fetch("/api/scout",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prompt})});
+          if(!res.ok){ const e=await res.text(); throw new Error(`API ${res.status}: ${e}`); }
+          const d=await res.json();
+          setAiInsight(d.text||"No insight returned.");
+        }catch(e){ setAiInsight("Error: "+e.message); }
         setAiLoading(false);
       };
 
