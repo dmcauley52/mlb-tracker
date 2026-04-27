@@ -1,44 +1,22 @@
 import statsapi
 import json
+import urllib.request
 from datetime import date, timedelta
 
 SEASON = 2026
-MIN_AT_BATS = 20
+pid = 691740  # Daniel Susac
 
-# ── Test 1: Qualified batters ──────────────────────────────────────────
-print("=== Fetching qualified batters ===")
-leaders = statsapi.get("stats", {
-    "stats": "season",
-    "group": "hitting",
-    "season": SEASON,
-    "playerPool": "ALL",
-    "limit": 500,
-})
+print(f"=== Direct MLB API call for player {pid} ===")
 
-splits = leaders.get("stats", [{}])[0].get("splits", [])
-qualified = []
-for entry in splits:
-    ab = entry.get("stat", {}).get("atBats", 0)
-    player = entry.get("player", {})
-    if ab >= MIN_AT_BATS:
-        qualified.append({
-            "id": player.get("id"),
-            "name": player.get("fullName"),
-            "ab": ab
-        })
+url = f"https://statsapi.mlb.com/api/v1/people/{pid}/stats?stats=gameLog&group=hitting&season={SEASON}"
+print(f"URL: {url}\n")
 
-print(f"Players with {MIN_AT_BATS}+ AB: {len(qualified)}")
+with urllib.request.urlopen(url) as response:
+    raw = json.loads(response.read().decode())
 
-# ── Test 2: Print full raw player_stat_data response ──────────────────
-if qualified:
-    pid = qualified[0]["id"]
-    name = qualified[0]["name"]
-    print(f"\n=== player_stat_data for {name} (id: {pid}) ===")
+splits = raw.get("stats", [{}])[0].get("splits", [])
+print(f"Total game splits returned: {len(splits)}")
 
-    raw = statsapi.player_stat_data(pid, group="hitting", type="gameLog")
-
-    print("\n--- TOP LEVEL KEYS ---")
-    print(list(raw.keys()))
-
-    print("\n--- FULL RAW DUMP (first 3000 chars) ---")
-    print(json.dumps(raw, indent=2)[:3000])
+if splits:
+    print("\n--- FULL RAW LAST GAME ENTRY ---")
+    print(json.dumps(splits[-1], indent=2))
