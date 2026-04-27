@@ -110,4 +110,327 @@
         const avg = parseFloat(row.batting_avg)||0;
         return {
           date: new Date(row.game_date).toLocaleDateString("en-US",{month:"short",day:"numeric"}),
-          cycleDay:cyc, phase:ph.name, ph
+          cycleDay:cyc, phase:ph.name, phaseColor:ph.color,
+          avg:+avg.toFixed(3),
+          ops:+(parseFloat(row.ops)||avg*1.7).toFixed(3),
+          hits:row.hits||0, hr:row.home_runs||0,
+        };
+      });
+    }
+
+    function App(){
+      const [sbUrl,setSbUrl] = useState(localStorage.getItem("sbUrl")||"");
+      const [sbKey,setSbKey] = useState(localStorage.getItem("sbKey")||"");
+      const [dataSource,setDataSource] = useState("demo");
+      const [roster,setRoster] = useState([]);
+      const [rosterLoading,setRosterLoading] = useState(false);
+      const [rosterError,setRosterError] = useState("");
+      const [teamFilter,setTeamFilter] = useState("ALL");
+      const [search,setSearch] = useState("");
+      const [selectedPlayer,setSelectedPlayer] = useState(null);
+      const [gameData,setGameData] = useState([]);
+      const [dataLoading,setDataLoading] = useState(false);
+      const [dataError,setDataError] = useState("");
+      const [view,setView] = useState("timeline");
+      const [aiInsight,setAiInsight] = useState("");
+      const [aiLoading,setAiLoading] = useState(false);
+
+      const loadRoster = useCallback(async()=>{
+        if(dataSource==="demo"){
+          setRoster(DEMO_PLAYERS);
+          setSelectedPlayer(DEMO_PLAYERS[0]);
+          return;
+        }
+        if(!sbUrl||!sbKey) return;
+        setRosterLoading(true); setRosterError("");
+        try{
+          const players = await fetchRoster(sbUrl,sbKey);
+          setRoster(players);
+          if(players.length) setSelectedPlayer(players[0]);
+        }catch(e){
+          setRosterError(e.message);
+          setRoster(DEMO_PLAYERS);
+          setSelectedPlayer(DEMO_PLAYERS[0]);
+        }
+        setRosterLoading(false);
+      },[dataSource,sbUrl,sbKey]);
+
+      const loadGames = useCallback(async()=>{
+        if(!selectedPlayer) return;
+        setDataLoading(true); setDataError(""); setAiInsight("");
+        try{
+          if(dataSource==="live"&&sbUrl&&sbKey){
+            const rows = await fetchPlayerGames(sbUrl,sbKey,selectedPlayer.player_name);
+            setGameData(rows.length?transformRows(rows):genDemo(selectedPlayer.player_name,1.5));
+            if(!rows.length) setDataError("No rows found — showing demo data.");
+          }else{
+            const idx = DEMO_PLAYERS.findIndex(p=>p.player_name===selectedPlayer.player_name);
+            await new Promise(r=>setTimeout(r,300));
+            setGameData(genDemo(selectedPlayer.player_name,idx>=0?idx*1.3+1:1.5));
+          }
+        }catch(e){
+          setDataError(e.message);
+          setGameData(genDemo(selectedPlayer.player_name,1.5));
+        }
+        setDataLoading(false);
+      },[selectedPlayer,dataSource,sbUrl,sbKey]);
+
+      useEffect(()=>{loadRoster();},[loadRoster]);
+      useEffect(()=>{loadGames();},[loadGames]);
+
+      const saveCredentials = ()=>{
+        localStorage.setItem("sbUrl",sbUrl);
+        localStorage.setItem("sbKey",sbKey);
+        loadRoster();
+      };
+
+      const teams = ["ALL",...Array.from(new Set(roster.map(p=>p.team))).sort()];
+      const filteredRoster = roster.filter(p=>
+        (teamFilter==="ALL"||p.team===teamFilter)&&
+        p.player_name.toLowerCase().includes(search.toLowerCase())
+      );
+      const grouped = filteredRoster.reduce((acc,p)=>{
+        (acc[p.team]=acc[p.team]||[]).push(p); return acc;
+      },{});
+
+      const currentCycleDay = gameData.length?gameData[gameData.length-1].cycleDay:0;
+      const currentPhase = getPhase(currentCycleDay);
+
+      const cycleData = Array.from({length:CYCLE_LENGTH},(_,i)=>{
+        const ph = getPhase(i);
+        const dg = gameData.filter(g=>g.cycleDay===i);
+        const avg = dg.length?dg.reduce((s,g)=>s+g.avg,0)/dg.length:null;
+        return {day:i+1,avg:avg?+avg.toFixed(3):null,phase:ph.name,color:ph.color};
+      });
+
+      const fetchInsight = async()=>{
+        setAiLoading(true);
+        const ps = PHASE_CONFIG.map(p=>`${p.name}: AVG ${phaseAvg(gameData,p.name,"avg")}, OPS ${phaseAvg(gameData,p.name,"ops")}`).join("\n");
+        try{
+          const res = await fetch("https://api.anthropic.com/v1/messages",{
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({
+              model:"claude-sonnet-4-20250514",max_tokens:1000,
+              messages:[{role:"user",content:`You are a baseball analytics AI. Analyze 28-day performance cycle for ${selectedPlayer?.player_name} (${selectedPlayer?.team}):\n\n${ps}\n\nProvide 3-4 sentence scouting insight: strongest phase, weakest phase, fantasy recommendation, bold prediction.`}]
+            })
+          });
+          const d = await res.json();
+          setAiInsight(d.content?.[0]?.text||"No insight returned.");
+        }catch{ setAiInsight("Error calling AI."); }
+        setAiLoading(false);
+      };
+
+      const s = {
+        card:{background:"#1e293b",borderRadius:12,padding:16},
+        input:{background:"#0f172a",border:"1px solid #334155",borderRadius:6,padding:"7px 10px",color:"#f1f5f9",fontSize:12,width:"100%",boxSizing:"border-box"},
+        btn:(active,color="#3b82f6")=>({padding:"7px 14px",borderRadius:8,border:"none",cursor:"pointer",fontWeight:700,fontSize:12,background:active?color:"#334155",color:active?"#fff":"#94a3b8"}),
+      };
+
+      return (
+        <div style={{background:"#0f172a",minHeight:"100vh",color:"#f1f5f9",fontFamily:"Inter,sans-serif",padding:"20px 16px"}}>
+          <div style={{maxWidth:900,margin:"0 auto"}}>
+            <div style={{marginBottom:20}}>
+              <h1 style={{fontSize:22,fontWeight:800,margin:0}}>⚾ MLB Cycle Analyzer</h1>
+              <p style={{color:"#64748b",fontSize:13,margin:"4px 0 0"}}>28-day performance cycle · {roster.length} players loaded</p>
+            </div>
+
+            <div style={{...s.card,marginBottom:20}}>
+              <div style={{display:"flex",gap:8,marginBottom:12}}>
+                {["demo","live"].map(m=>(
+                  <button key={m} onClick={()=>setDataSource(m)} style={s.btn(dataSource===m,m==="live"?"#22c55e":"#3b82f6")}>
+                    {m==="demo"?"🎭 Demo Mode":"🔴 Live Supabase"}
+                  </button>
+                ))}
+                {rosterLoading&&<span style={{fontSize:12,color:"#64748b",alignSelf:"center"}}>Loading roster...</span>}
+                {dataSource==="live"&&!rosterLoading&&roster.length>0&&!rosterError&&
+                  <span style={{fontSize:12,color:"#22c55e",alignSelf:"center"}}>✓ {roster.length} players</span>}
+              </div>
+              {dataSource==="live"&&(
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr auto",gap:8}}>
+                  <div>
+                    <div style={{fontSize:11,color:"#64748b",marginBottom:4}}>Supabase Project URL</div>
+                    <input value={sbUrl} onChange={e=>setSbUrl(e.target.value)} placeholder="https://xxxx.supabase.co" style={s.input}/>
+                  </div>
+                  <div>
+                    <div style={{fontSize:11,color:"#64748b",marginBottom:4}}>Anon/Public API Key</div>
+                    <input type="password" value={sbKey} onChange={e=>setSbKey(e.target.value)} placeholder="eyJhbGci..." style={s.input}/>
+                  </div>
+                  <div style={{alignSelf:"flex-end"}}>
+                    <button onClick={saveCredentials} style={{...s.btn(true,"#22c55e"),padding:"8px 16px"}}>Connect</button>
+                  </div>
+                </div>
+              )}
+              {(rosterError||dataError)&&(
+                <div style={{marginTop:10,padding:"8px 12px",background:"#450a0a",borderRadius:6,fontSize:12,color:"#fca5a5"}}>
+                  ⚠️ {rosterError||dataError}
+                </div>
+              )}
+            </div>
+
+            <div style={{display:"grid",gridTemplateColumns:"260px 1fr",gap:16,alignItems:"start"}}>
+              <div style={{...s.card,padding:12}}>
+                <div style={{fontSize:12,fontWeight:700,color:"#94a3b8",marginBottom:10}}>SELECT PLAYER</div>
+                <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Search player..." style={{...s.input,marginBottom:8}}/>
+                <select value={teamFilter} onChange={e=>setTeamFilter(e.target.value)} style={{...s.input,marginBottom:10,cursor:"pointer"}}>
+                  {teams.map(t=><option key={t} value={t}>{t==="ALL"?"All Teams":t}</option>)}
+                </select>
+                <div style={{maxHeight:480,overflowY:"auto",fontSize:12}}>
+                  {Object.keys(grouped).sort().map(team=>(
+                    <div key={team} style={{marginBottom:10}}>
+                      <div style={{fontSize:10,fontWeight:800,color:"#475569",textTransform:"uppercase",letterSpacing:1,padding:"4px 6px",marginBottom:2}}>{team}</div>
+                      {grouped[team].map(p=>(
+                        <div key={p.player_name} onClick={()=>setSelectedPlayer(p)}
+                          style={{padding:"7px 10px",borderRadius:6,cursor:"pointer",marginBottom:1,
+                            background:selectedPlayer?.player_name===p.player_name?"#3b82f6":"transparent",
+                            color:selectedPlayer?.player_name===p.player_name?"#fff":"#cbd5e1"}}>
+                          {p.player_name}
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                  {Object.keys(grouped).length===0&&<div style={{color:"#475569",fontStyle:"italic",padding:8}}>No players match.</div>}
+                </div>
+              </div>
+
+              <div>
+                {!selectedPlayer?(
+                  <div style={{...s.card,textAlign:"center",padding:60,color:"#64748b"}}>Select a player to begin</div>
+                ):dataLoading?(
+                  <div style={{...s.card,textAlign:"center",padding:60,color:"#64748b"}}>Loading game data...</div>
+                ):(
+                  <>
+                    <div style={{...s.card,marginBottom:12,borderLeft:`4px solid ${currentPhase?.color}`,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:12}}>
+                      <div>
+                        <div style={{fontSize:18,fontWeight:800}}>{selectedPlayer.player_name}</div>
+                        <div style={{fontSize:12,color:"#64748b"}}>{selectedPlayer.team}</div>
+                        <div style={{fontSize:13,color:currentPhase?.color,fontWeight:700,marginTop:4}}>
+                          {currentPhase?.name} Phase · Day {currentCycleDay+1}/{CYCLE_LENGTH}
+                        </div>
+                      </div>
+                      <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
+                        {PHASE_CONFIG.map(p=>(
+                          <div key={p.name} style={{textAlign:"center"}}>
+                            <div style={{fontSize:10,color:p.color,fontWeight:700}}>{p.name}</div>
+                            <div style={{fontSize:15,fontWeight:800}}>{phaseAvg(gameData,p.name,"avg")}</div>
+                            <div style={{fontSize:10,color:"#64748b"}}>AVG</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div style={{display:"flex",gap:6,marginBottom:12}}>
+                      {["timeline","cycle","phases"].map(v=>(
+                        <button key={v} onClick={()=>setView(v)} style={s.btn(view===v)}>
+                          {v==="timeline"?"📈 Timeline":v==="cycle"?"🔄 Cycle":"📊 Phases"}
+                        </button>
+                      ))}
+                    </div>
+
+                    {view==="timeline"&&(
+                      <div style={{...s.card,padding:"20px 12px 12px"}}>
+                        <ResponsiveContainer width="100%" height={200}>
+                          <AreaChart data={gameData} margin={{left:-10,right:10}}>
+                            <defs>
+                              <linearGradient id="ag" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
+                                <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                              </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#334155"/>
+                            <XAxis dataKey="date" tick={{fontSize:10,fill:"#64748b"}} interval={14}/>
+                            <YAxis domain={[0.150,0.450]} tick={{fontSize:10,fill:"#64748b"}}/>
+                            <Tooltip content={<CustomTooltip/>}/>
+                            <ReferenceLine y={0.260} stroke="#64748b" strokeDasharray="4 4"/>
+                            <Area type="monotone" dataKey="avg" stroke="#3b82f6" strokeWidth={2} fill="url(#ag)"
+                              dot={({cx,cy,payload})=><circle key={payload.date} cx={cx} cy={cy} r={3} fill={payload.phaseColor} stroke="none"/>}/>
+                          </AreaChart>
+                        </ResponsiveContainer>
+                        <div style={{display:"flex",gap:12,justifyContent:"center",marginTop:10,flexWrap:"wrap"}}>
+                          {PHASE_CONFIG.map(p=>(
+                            <div key={p.name} style={{display:"flex",alignItems:"center",gap:5,fontSize:11}}>
+                              <div style={{width:8,height:8,borderRadius:"50%",background:p.color}}/>
+                              <span style={{color:"#94a3b8"}}>{p.name}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {view==="cycle"&&(
+                      <div style={{...s.card,padding:"20px 12px 12px"}}>
+                        <ResponsiveContainer width="100%" height={200}>
+                          <AreaChart data={cycleData} margin={{left:-10,right:10}}>
+                            <defs>
+                              <linearGradient id="cg" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%" stopColor="#22c55e" stopOpacity={0.3}/>
+                                <stop offset="95%" stopColor="#22c55e" stopOpacity={0}/>
+                              </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#334155"/>
+                            <XAxis dataKey="day" tick={{fontSize:10,fill:"#64748b"}}/>
+                            <YAxis domain={[0.200,0.400]} tick={{fontSize:10,fill:"#64748b"}}/>
+                            <Tooltip formatter={v=>[v,"AVG"]} contentStyle={{background:"#1e293b",border:"1px solid #334155",borderRadius:8,fontSize:12}}/>
+                            <ReferenceLine x={currentCycleDay+1} stroke="#f59e0b" strokeWidth={2} label={{value:"TODAY",fontSize:10,fill:"#f59e0b"}}/>
+                            <Area type="monotone" dataKey="avg" stroke="#22c55e" strokeWidth={2.5} fill="url(#cg)"
+                              dot={({cx,cy,payload})=><circle key={payload.day} cx={cx} cy={cy} r={4} fill={payload.color} stroke="#0f172a" strokeWidth={1}/>}/>
+                          </AreaChart>
+                        </ResponsiveContainer>
+                        <div style={{display:"flex",marginTop:12,borderRadius:8,overflow:"hidden"}}>
+                          {PHASE_CONFIG.map(p=>(
+                            <div key={p.name} style={{flex:1,background:p.color+"22",borderTop:`3px solid ${p.color}`,padding:"8px 6px",textAlign:"center"}}>
+                              <div style={{fontSize:11,fontWeight:700,color:p.color}}>{p.name}</div>
+                              <div style={{fontSize:10,color:"#64748b"}}>Days {p.start+1}–{p.end+1}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {view==="phases"&&(
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                        {PHASE_CONFIG.map(p=>{
+                          const pg = gameData.filter(g=>g.phase===p.name);
+                          return (
+                            <div key={p.name} style={{...s.card,borderTop:`3px solid ${p.color}`}}>
+                              <div style={{fontWeight:700,color:p.color,fontSize:14}}>{p.name}</div>
+                              <div style={{fontSize:11,color:"#64748b",marginBottom:10}}>{p.desc}</div>
+                              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
+                                {[["AVG",phaseAvg(gameData,p.name,"avg")],["OPS",phaseAvg(gameData,p.name,"ops")],
+                                  ["Hits",pg.reduce((s,g)=>s+g.hits,0)],["HRs",pg.reduce((s,g)=>s+g.hr,0)]].map(([label,val])=>(
+                                  <div key={label} style={{background:"#0f172a",borderRadius:8,padding:"8px 10px"}}>
+                                    <div style={{fontSize:10,color:"#64748b"}}>{label}</div>
+                                    <div style={{fontSize:17,fontWeight:800}}>{val}</div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    <div style={{...s.card,marginTop:12}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                        <div style={{fontWeight:700,fontSize:13}}>🤖 AI Scouting Insight</div>
+                        <button onClick={fetchInsight} disabled={aiLoading} style={s.btn(!aiLoading)}>
+                          {aiLoading?"Analyzing...":`Analyze ${selectedPlayer.player_name.split(" ")[1]}`}
+                        </button>
+                      </div>
+                      {aiInsight
+                        ?<p style={{fontSize:13,color:"#cbd5e1",lineHeight:1.7,margin:0}}>{aiInsight}</p>
+                        :<p style={{fontSize:13,color:"#475569",fontStyle:"italic",margin:0}}>Click Analyze to generate a Claude-powered scouting report.</p>}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+  </script>
+</body>
+</html>
