@@ -1,4 +1,5 @@
 This is a mlb cycle tracker app
 
-supabase anaon key
+DATABASE_URL=postgresql://postgres.nljkenekumgfnzqnccnc:Lum3dx061952@aws-1-us-east-1.pooler.supabase.com:6543/postgres
+supabase anon key
 eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5samtlbmVrdW1nZm56cW5jY25jIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzczMDQ2MjYsImV4cCI6MjA5Mjg4MDYyNn0.CCE4kST-yJXAA6l4Pfoxn-mntzLltUl9jUY81o56vmk
