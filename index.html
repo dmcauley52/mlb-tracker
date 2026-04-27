@@ -227,23 +227,42 @@
 
     // Build chart-ready data arrays from analysis result
     function buildCycleChartData(gameData, analysis) {
-      if (!analysis) return { historical: [], forecast: [] };
-      const { reconstructed, forecastValues, N } = analysis;
+      if (!analysis) return [];
+      const { reconstructed, forecastValues } = analysis;
 
+      // Historical points: actual avg + FFT reconstruction, forecast=null
       const historical = gameData.map((g,i) => ({
-        date:   g.date,
-        actual: +g.avg.toFixed(3),
-        fitted: +Math.max(0.050, reconstructed[i]).toFixed(3),
+        date:     g.date,
+        actual:   +g.avg.toFixed(3),
+        fitted:   +Math.max(0.050, reconstructed[i]).toFixed(3),
+        forecast: null,
       }));
 
-      const lastDate = gameData.length ? gameData[gameData.length-1].date : "Future";
-      const forecast = forecastValues.map((v,i) => ({
-        date:   `+${i+1}d`,
-        fitted: +Math.max(0.050, v).toFixed(3),
+      // Connect: last historical point also seeds forecast so line is continuous
+      const lastFitted = historical.length ? historical[historical.length-1].fitted : 0;
+
+      // Forecast points: actual=null, fitted=null, forecast=value
+      // First forecast point duplicates the last fitted value so the amber line
+      // starts exactly where the green line ends — no visual gap.
+      const forecastPoints = forecastValues.map((v,i) => ({
+        date:     `+${i+1}d`,
+        actual:   null,
+        fitted:   null,
+        forecast: +Math.max(0.050, v).toFixed(3),
         isForecast: true,
       }));
+      // Seed the join: insert a bridge point at index 0 with both fitted and forecast set
+      if (forecastPoints.length && historical.length) {
+        forecastPoints.unshift({
+          date:     historical[historical.length-1].date,
+          actual:   null,
+          fitted:   lastFitted,
+          forecast: +Math.max(0.050, forecastValues[0]).toFixed(3),
+          isForecast: false,
+        });
+      }
 
-      return { historical, forecast };
+      return [...historical, ...forecastPoints];
     }
 
     // Map a position within the player's dominant cycle to a phase color
@@ -762,9 +781,8 @@
 
                     {/* Cycle — FFT-based player-specific cycle analysis */}
                     {view==="cycle"&&(()=>{
-                      const chartData = buildCycleChartData(gameData, cycleAnalysis);
-                      const allPoints = [...chartData.historical, ...chartData.forecast];
-                      const yVals = allPoints.map(p=>p.actual||p.fitted).filter(Boolean);
+                      const merged = buildCycleChartData(gameData, cycleAnalysis);
+                      const yVals = merged.map(p=>p.actual||p.fitted||p.forecast).filter(Boolean);
                       const yMin  = Math.max(0.050, +(Math.min(...yVals)-0.030).toFixed(3));
                       const yMax  = Math.min(0.600, +(Math.max(...yVals)+0.030).toFixed(3));
                       return(
@@ -790,14 +808,14 @@
 
                             {/* Combined historical + forecast chart */}
                             <ResponsiveContainer width="100%" height={220}>
-                              <AreaChart margin={{left:-10,right:10}}>
+                              <AreaChart data={merged} margin={{left:-10,right:10}}>
                                 <defs>
                                   <linearGradient id="actualGrad" x1="0" y1="0" x2="0" y2="1">
                                     <stop offset="5%"  stopColor="#3b82f6" stopOpacity={0.15}/>
                                     <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
                                   </linearGradient>
                                   <linearGradient id="fitGrad" x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="5%"  stopColor="#22c55e" stopOpacity={0.25}/>
+                                    <stop offset="5%"  stopColor="#22c55e" stopOpacity={0.20}/>
                                     <stop offset="95%" stopColor="#22c55e" stopOpacity={0}/>
                                   </linearGradient>
                                   <linearGradient id="fcastGrad" x1="0" y1="0" x2="0" y2="1">
@@ -806,35 +824,37 @@
                                   </linearGradient>
                                 </defs>
                                 <CartesianGrid strokeDasharray="3 3" stroke="#334155"/>
-                                <XAxis dataKey="date" data={allPoints} tick={{fontSize:9,fill:"#64748b"}}
-                                  interval={Math.max(1,Math.floor(allPoints.length/8))}/>
+                                <XAxis dataKey="date" tick={{fontSize:9,fill:"#64748b"}}
+                                  interval={Math.max(1,Math.floor(merged.length/9))}/>
                                 <YAxis domain={[yMin,yMax]} tick={{fontSize:10,fill:"#64748b"}}/>
                                 <Tooltip
                                   content={({active,payload,label})=>{
                                     if(!active||!payload?.length) return null;
                                     const isFc = payload[0]?.payload?.isForecast;
+                                    const vals = payload.filter(p=>p.value!=null);
                                     return(
                                       <div style={{background:"#1e293b",border:`1px solid ${isFc?"#f59e0b":"#334155"}`,borderRadius:8,padding:"8px 12px",fontSize:12}}>
                                         <div style={{color:"#94a3b8",marginBottom:3}}>{label}{isFc?" (forecast)":""}</div>
-                                        {payload.map(p=>(
-                                          <div key={p.name} style={{color:p.color}}>
-                                            {p.name==="actual"?"Actual":p.name==="fitted"?"FFT fit":"Forecast"}: <b>{p.value?.toFixed(3)}</b>
+                                        {vals.map(p=>(
+                                          <div key={p.dataKey} style={{color:p.color}}>
+                                            {p.dataKey==="actual"?"Actual":p.dataKey==="fitted"?"FFT fit":"Forecast"}: <b>{(+p.value).toFixed(3)}</b>
                                           </div>
                                         ))}
                                       </div>
                                     );
                                   }}
                                 />
-                                <ReferenceLine x={gameData[gameData.length-1]?.date} stroke="#f59e0b" strokeDasharray="3 3"
-                                  label={{value:"NOW",fontSize:9,fill:"#f59e0b",position:"insideTopRight"}}/>
+                                <ReferenceLine x={gameData[gameData.length-1]?.date} stroke="#94a3b8" strokeDasharray="3 3"
+                                  label={{value:"NOW",fontSize:9,fill:"#94a3b8",position:"insideTopRight"}}/>
                                 {/* Actual avg — blue dots */}
-                                <Area data={chartData.historical} type="monotone" dataKey="actual"
-                                  stroke="#3b82f6" strokeWidth={1.5} fill="url(#actualGrad)" dot={{r:2,fill:"#3b82f6",stroke:"none"}}/>
-                                {/* FFT reconstruction — green line */}
-                                <Area data={chartData.historical} type="monotone" dataKey="fitted"
-                                  stroke="#22c55e" strokeWidth={2} strokeDasharray="none" fill="url(#fitGrad)" dot={false}/>
-                                {/* Forecast — amber dashed */}
-                                <Area data={chartData.forecast} type="monotone" dataKey="fitted"
+                                <Area type="monotone" dataKey="actual" connectNulls={false}
+                                  stroke="#3b82f6" strokeWidth={1.5} fill="url(#actualGrad)"
+                                  dot={({cx,cy,payload})=>payload.actual!=null?<circle key={cx} cx={cx} cy={cy} r={2} fill="#3b82f6" stroke="none"/>:<g key={cx}/>}/>
+                                {/* FFT reconstruction — green line, no fill in forecast zone */}
+                                <Area type="monotone" dataKey="fitted" connectNulls={false}
+                                  stroke="#22c55e" strokeWidth={2} fill="url(#fitGrad)" dot={false}/>
+                                {/* 14-day forecast — amber dashed, starts at last fitted point */}
+                                <Area type="monotone" dataKey="forecast" connectNulls={false}
                                   stroke="#f59e0b" strokeWidth={2} strokeDasharray="5 3" fill="url(#fcastGrad)" dot={false}/>
                               </AreaChart>
                             </ResponsiveContainer>
