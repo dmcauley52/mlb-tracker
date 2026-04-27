@@ -7,19 +7,23 @@
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
   <script src="https://unpkg.com/recharts@2.10.0/umd/Recharts.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #0f172a; color: #f1f5f9; font-family: Inter, sans-serif; }
+    ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-track { background: #1e293b; } ::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
   </style>
 </head>
 <body>
   <div id="root"></div>
   <script type="text/babel">
-    const { useState, useEffect, useCallback } = React;
-    const { AreaChart, Area, XAxis, YAxis, CartesianGrid,
-            Tooltip, ResponsiveContainer, ReferenceLine } = Recharts;
+    const { useState, useEffect, useCallback, useRef } = React;
+    const { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid,
+            Tooltip, ResponsiveContainer, ReferenceLine, Cell } = Recharts;
 
+    const SEASON = 2026;
+    const MIN_AT_BATS = 20;
     const CYCLE_LENGTH = 28;
     const PHASE_CONFIG = [
       { name:"Peak",      start:0,  end:6,  color:"#22c55e", desc:"High energy, strong output" },
@@ -29,34 +33,38 @@
     ];
     const getPhase = d => PHASE_CONFIG.find(p => d >= p.start && d <= p.end);
 
-    const DEMO_PLAYERS = [
-      { player_name:"Aaron Judge",     team:"New York Yankees" },
-      { player_name:"Shohei Ohtani",   team:"Los Angeles Dodgers" },
-      { player_name:"Freddie Freeman", team:"Los Angeles Dodgers" },
-      { player_name:"Mookie Betts",    team:"Los Angeles Dodgers" },
-      { player_name:"Gunnar Henderson",team:"Baltimore Orioles" },
-      { player_name:"Yordan Alvarez",  team:"Houston Astros" },
-    ];
-
-    const genDemo = (name, seed) => {
-      const rng = s => { let x = Math.sin(s)*10000; return x-Math.floor(x); };
-      return Array.from({length:90},(_,i)=>{
-        const d = new Date(); d.setDate(d.getDate()-(89-i));
-        const cyc = i % CYCLE_LENGTH;
-        const ph = getPhase(cyc);
-        const avg = Math.max(0.1,Math.min(0.5,
-          0.260+0.040*Math.sin((2*Math.PI*i)/CYCLE_LENGTH+seed)+
-          (rng(seed*i+1)-0.5)*0.08));
-        return {
-          date: d.toLocaleDateString("en-US",{month:"short",day:"numeric"}),
-          cycleDay:cyc, phase:ph.name, phaseColor:ph.color,
-          avg:+avg.toFixed(3),
-          ops:+(avg*1.7+rng(seed*i+2)*0.15).toFixed(3),
-          hits:Math.floor(rng(seed*i+3)*3)+(ph.name==="Peak"?1:0),
-          hr:rng(seed*i+4)>0.88?1:0,
-        };
-      });
+    // MLB player ID lookup (top players — fallback before live search)
+    const MLB_IDS = {
+      "Aaron Judge": 592450, "Shohei Ohtani": 660271, "Mookie Betts": 605141,
+      "Freddie Freeman": 518692, "Juan Soto": 665742, "Mike Trout": 545361,
+      "Ronald Acuña Jr.": 660670, "Bryce Harper": 547180, "Trea Turner": 607208,
+      "José Ramírez": 608070, "Nolan Arenado": 571448, "Paul Goldschmidt": 502671,
+      "Pete Alonso": 624413, "Vladimir Guerrero Jr.": 665489, "Bo Bichette": 666182,
+      "Yordan Alvarez": 670541, "Kyle Tucker": 663538, "Julio Rodríguez": 677594,
+      "Gunnar Henderson": 683002, "Corey Seager": 608369, "Marcus Semien": 543760,
+      "Rafael Devers": 646240, "Austin Riley": 663586, "Matt Olson": 621566,
+      "Corbin Carroll": 682998, "Jarren Duran": 680776, "Adolis García": 666969,
+      "Ha-Seong Kim": 673490, "Jeff McNeil": 643446, "Max Muncy": 571970,
+      "Ketel Marte": 606466, "Christian Yelich": 592885, "Teoscar Hernández": 606192,
     };
+
+    const DEMO_PLAYERS = Object.keys(MLB_IDS).slice(0,6).map(name=>({player_name:name,team:"MLB"}));
+
+    const rng = (s) => { let x = Math.sin(s)*10000; return x - Math.floor(x); };
+    const genDemo = (name, seed) => Array.from({length:90},(_,i)=>{
+      const d = new Date(); d.setDate(d.getDate()-(89-i));
+      const cyc = i % CYCLE_LENGTH;
+      const ph = getPhase(cyc);
+      const avg = Math.max(0.1,Math.min(0.5,
+        0.260+0.040*Math.sin((2*Math.PI*i)/CYCLE_LENGTH+seed)+(rng(seed*i+1)-0.5)*0.08));
+      return {
+        date: d.toLocaleDateString("en-US",{month:"short",day:"numeric"}),
+        cycleDay:cyc, phase:ph.name, phaseColor:ph.color,
+        avg:+avg.toFixed(3), ops:+(avg*1.7+rng(seed*i+2)*0.15).toFixed(3),
+        hits:Math.floor(rng(seed*i+3)*3)+(ph.name==="Peak"?1:0),
+        hr:rng(seed*i+4)>0.88?1:0, ab:Math.floor(rng(seed*i+5)*3)+2,
+      };
+    });
 
     const phaseAvg = (games,ph,stat) => {
       const f = games.filter(g=>g.phase===ph);
@@ -67,15 +75,16 @@
       if(!active||!payload?.length) return null;
       const d = payload[0].payload;
       return (
-        <div style={{background:"#1e293b",border:`1px solid ${d.phaseColor}`,borderRadius:8,padding:"10px 14px",fontSize:12}}>
+        <div style={{background:"#1e293b",border:`1px solid ${d.phaseColor||"#334155"}`,borderRadius:8,padding:"10px 14px",fontSize:12}}>
           <div style={{color:"#94a3b8",marginBottom:4}}>{d.date}</div>
-          <div style={{color:d.phaseColor,fontWeight:700,marginBottom:6}}>📍 {d.phase} (Day {d.cycleDay+1})</div>
-          <div style={{color:"#f1f5f9"}}>AVG: <b>{d.avg}</b> · OPS: <b>{d.ops}</b></div>
-          <div style={{color:"#f1f5f9"}}>Hits: <b>{d.hits}</b> · HR: <b>{d.hr}</b></div>
+          <div style={{color:d.phaseColor||"#3b82f6",fontWeight:700,marginBottom:6}}>📍 {d.phase} (Day {d.cycleDay+1})</div>
+          <div style={{color:"#f1f5f9"}}>AVG: <b>{typeof d.avg==="number"?d.avg.toFixed(3):d.avg}</b> · OPS: <b>{typeof d.ops==="number"?d.ops.toFixed(3):d.ops}</b></div>
+          <div style={{color:"#f1f5f9"}}>Hits: <b>{d.hits}</b> · HR: <b>{d.hr}</b>{d.ab?" · AB: ":""}{ d.ab?<b>{d.ab}</b>:""}</div>
         </div>
       );
     };
 
+    // ── Supabase helpers ──────────────────────────────────────────────────────
     async function sbFetch(url,key,path){
       const r = await fetch(`${url}/rest/v1/${path}`,{
         headers:{apikey:key,Authorization:`Bearer ${key}`}
@@ -83,63 +92,120 @@
       if(!r.ok) throw new Error(`Supabase ${r.status}: ${await r.text()}`);
       return r.json();
     }
-
     async function fetchRoster(url,key){
       const rows = await sbFetch(url,key,
         "player_gamelogs?select=player_name,team&order=team.asc,player_name.asc&limit=2000");
       const seen = new Set();
-      return rows.filter(r=>{
-        const k=`${r.player_name}||${r.team}`;
-        if(seen.has(k)) return false;
-        seen.add(k); return true;
-      });
+      return rows.filter(r=>{ const k=`${r.player_name}||${r.team}`; if(seen.has(k))return false; seen.add(k);return true; });
     }
-
     async function fetchPlayerGames(url,key,playerName){
       const since = new Date(); since.setDate(since.getDate()-90);
       const iso = since.toISOString().split("T")[0];
       const enc = encodeURIComponent(playerName);
-      return sbFetch(url,key,
-        `player_gamelogs?player_name=eq.${enc}&game_date=gte.${iso}&order=game_date.asc&select=*`);
+      return sbFetch(url,key,`player_gamelogs?player_name=eq.${enc}&game_date=gte.${iso}&order=game_date.asc&select=*`);
     }
-
     function transformRows(rows){
       return rows.map((row,i)=>{
         const cyc = i % CYCLE_LENGTH;
         const ph = getPhase(cyc);
         const avg = parseFloat(row.batting_avg)||0;
         return {
-          date: new Date(row.game_date).toLocaleDateString("en-US",{month:"short",day:"numeric"}),
+          date: new Date(row.game_date+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"}),
           cycleDay:cyc, phase:ph.name, phaseColor:ph.color,
-          avg:+avg.toFixed(3),
-          ops:+(parseFloat(row.ops)||avg*1.7).toFixed(3),
-          hits:row.hits||0, hr:row.home_runs||0,
+          avg:+avg.toFixed(3), ops:+(parseFloat(row.ops)||avg*1.7).toFixed(3),
+          hits:row.hits||0, hr:row.home_runs||0, ab:row.at_bats||0,
         };
       });
     }
 
+    // ── MLB Stats API helpers ─────────────────────────────────────────────────
+    async function mlbSearchPlayer(query){
+      // Try name-based search endpoint first
+      try {
+        const r = await fetch(`https://statsapi.mlb.com/api/v1/people/search?names=${encodeURIComponent(query)}&sportIds=1&active=true`);
+        const d = await r.json();
+        if(d.people?.length) return d.people[0];
+      } catch(_){}
+      // Fallback: check local map
+      const lower = query.toLowerCase();
+      const match = Object.entries(MLB_IDS).find(([name])=>name.toLowerCase().includes(lower));
+      if(match) return {id:match[1],fullName:match[0]};
+      return null;
+    }
+
+    async function mlbFetchGameLog(playerId){
+      const r = await fetch(`https://statsapi.mlb.com/api/v1/people/${playerId}/stats?stats=gameLog&season=${SEASON}&group=hitting&sportId=1`);
+      const d = await r.json();
+      return d.stats?.[0]?.splits||[];
+    }
+
+    async function mlbFetchSeasonStats(playerId){
+      const r = await fetch(`https://statsapi.mlb.com/api/v1/people/${playerId}/stats?stats=season&season=${SEASON}&group=hitting&sportId=1`);
+      const d = await r.json();
+      return d.stats?.[0]?.splits?.[0]?.stat||{};
+    }
+
+    async function mlbFetchInfo(playerId){
+      const r = await fetch(`https://statsapi.mlb.com/api/v1/people/${playerId}?hydrate=currentTeam`);
+      const d = await r.json();
+      return d.people?.[0]||{};
+    }
+
+    function transformMLBSplits(splits){
+      return splits
+        .filter(s=>(s.stat?.atBats||0)>0)
+        .map((s,i)=>{
+          const cyc = i % CYCLE_LENGTH;
+          const ph = getPhase(cyc);
+          const avg = parseFloat(s.stat?.avg)||0;
+          const obp = parseFloat(s.stat?.obp)||0;
+          const slg = parseFloat(s.stat?.slg)||0;
+          return {
+            date: s.date ? new Date(s.date+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"}) : `G${i+1}`,
+            cycleDay:cyc, phase:ph.name, phaseColor:ph.color,
+            avg:+avg.toFixed(3),
+            ops:+(obp+slg).toFixed(3),
+            hits:s.stat?.hits||0,
+            hr:s.stat?.homeRuns||0,
+            ab:s.stat?.atBats||0,
+            rbi:s.stat?.rbi||0,
+          };
+        });
+    }
+
+    // ── Main App ──────────────────────────────────────────────────────────────
     function App(){
-      const [sbUrl,setSbUrl] = useState(localStorage.getItem("sbUrl")||"");
-      const [sbKey,setSbKey] = useState(localStorage.getItem("sbKey")||"");
+      const [sbUrl,setSbUrl]         = useState(localStorage.getItem("sbUrl")||"");
+      const [sbKey,setSbKey]         = useState(localStorage.getItem("sbKey")||"");
       const [dataSource,setDataSource] = useState("demo");
-      const [roster,setRoster] = useState([]);
+      const [roster,setRoster]       = useState([]);
       const [rosterLoading,setRosterLoading] = useState(false);
-      const [rosterError,setRosterError] = useState("");
+      const [rosterError,setRosterError]     = useState("");
       const [teamFilter,setTeamFilter] = useState("ALL");
-      const [search,setSearch] = useState("");
+      const [search,setSearch]       = useState("");
       const [selectedPlayer,setSelectedPlayer] = useState(null);
-      const [gameData,setGameData] = useState([]);
+      const [gameData,setGameData]   = useState([]);
+      const [seasonStats,setSeasonStats] = useState(null);
       const [dataLoading,setDataLoading] = useState(false);
       const [dataError,setDataError] = useState("");
-      const [view,setView] = useState("timeline");
+      const [view,setView]           = useState("timeline");
       const [aiInsight,setAiInsight] = useState("");
       const [aiLoading,setAiLoading] = useState(false);
+      // MLB live search state
+      const [mlbQuery,setMlbQuery]   = useState("");
+      const [mlbSearching,setMlbSearching] = useState(false);
+      const [mlbError,setMlbError]   = useState("");
+      const mlbInputRef = useRef(null);
 
+      // ── Roster loading ──
       const loadRoster = useCallback(async()=>{
         if(dataSource==="demo"){
-          setRoster(DEMO_PLAYERS);
-          setSelectedPlayer(DEMO_PLAYERS[0]);
-          return;
+          setRoster(DEMO_PLAYERS); setSelectedPlayer(DEMO_PLAYERS[0]); return;
+        }
+        if(dataSource==="mlb"){
+          // Populate roster from MLB_IDS map so sidebar shows something
+          const players = Object.entries(MLB_IDS).map(([name])=>({player_name:name,team:"MLB"}));
+          setRoster(players); setSelectedPlayer(null); return;
         }
         if(!sbUrl||!sbKey) return;
         setRosterLoading(true); setRosterError("");
@@ -148,22 +214,45 @@
           setRoster(players);
           if(players.length) setSelectedPlayer(players[0]);
         }catch(e){
-          setRosterError(e.message);
-          setRoster(DEMO_PLAYERS);
-          setSelectedPlayer(DEMO_PLAYERS[0]);
+          setRosterError(e.message); setRoster(DEMO_PLAYERS); setSelectedPlayer(DEMO_PLAYERS[0]);
         }
         setRosterLoading(false);
       },[dataSource,sbUrl,sbKey]);
 
+      // ── Game data loading ──
       const loadGames = useCallback(async()=>{
         if(!selectedPlayer) return;
-        setDataLoading(true); setDataError(""); setAiInsight("");
+        setDataLoading(true); setDataError(""); setAiInsight(""); setSeasonStats(null);
         try{
-          if(dataSource==="live"&&sbUrl&&sbKey){
+          if(dataSource==="mlb"){
+            // Use MLB Stats API directly
+            const playerId = selectedPlayer.mlbId || MLB_IDS[selectedPlayer.player_name];
+            if(!playerId){ setDataError("No MLB ID found for this player."); setDataLoading(false); return; }
+            const [splits, ss, info] = await Promise.all([
+              mlbFetchGameLog(playerId),
+              mlbFetchSeasonStats(playerId),
+              mlbFetchInfo(playerId),
+            ]);
+            const transformed = transformMLBSplits(splits);
+            if(transformed.length===0){
+              setDataError(`No ${SEASON} game log found — player may not have reached ${MIN_AT_BATS} AB yet.`);
+              setGameData(genDemo(selectedPlayer.player_name,1.5));
+            } else {
+              setGameData(transformed);
+            }
+            setSeasonStats({
+              avg: ss.avg||".---", ops: ss.ops||".---",
+              hr: ss.homeRuns||0, rbi: ss.rbi||0,
+              hits: ss.hits||0, ab: ss.atBats||0,
+              games: ss.gamesPlayed||0,
+              team: info.currentTeam?.name||selectedPlayer.team||"",
+              pos: info.primaryPosition?.abbreviation||"",
+            });
+          } else if(dataSource==="live"&&sbUrl&&sbKey){
             const rows = await fetchPlayerGames(sbUrl,sbKey,selectedPlayer.player_name);
             setGameData(rows.length?transformRows(rows):genDemo(selectedPlayer.player_name,1.5));
             if(!rows.length) setDataError("No rows found — showing demo data.");
-          }else{
+          } else {
             const idx = DEMO_PLAYERS.findIndex(p=>p.player_name===selectedPlayer.player_name);
             await new Promise(r=>setTimeout(r,300));
             setGameData(genDemo(selectedPlayer.player_name,idx>=0?idx*1.3+1:1.5));
@@ -175,13 +264,29 @@
         setDataLoading(false);
       },[selectedPlayer,dataSource,sbUrl,sbKey]);
 
-      useEffect(()=>{loadRoster();},[loadRoster]);
-      useEffect(()=>{loadGames();},[loadGames]);
+      useEffect(()=>{ loadRoster(); },[loadRoster]);
+      useEffect(()=>{ loadGames(); },[loadGames]);
+
+      // ── MLB live player search ──
+      const handleMlbSearch = async()=>{
+        if(!mlbQuery.trim()) return;
+        setMlbSearching(true); setMlbError("");
+        try{
+          const person = await mlbSearchPlayer(mlbQuery.trim());
+          if(!person){ setMlbError("Player not found — try full name (e.g. Aaron Judge)"); setMlbSearching(false); return; }
+          const p = { player_name: person.fullName||mlbQuery, team:"MLB", mlbId: person.id };
+          setRoster(prev=>{
+            const exists = prev.find(x=>x.player_name===p.player_name);
+            return exists ? prev : [p,...prev];
+          });
+          setSelectedPlayer(p);
+          setMlbQuery("");
+        }catch(e){ setMlbError(e.message); }
+        setMlbSearching(false);
+      };
 
       const saveCredentials = ()=>{
-        localStorage.setItem("sbUrl",sbUrl);
-        localStorage.setItem("sbKey",sbKey);
-        loadRoster();
+        localStorage.setItem("sbUrl",sbUrl); localStorage.setItem("sbKey",sbKey); loadRoster();
       };
 
       const teams = ["ALL",...Array.from(new Set(roster.map(p=>p.team))).sort()];
@@ -189,9 +294,7 @@
         (teamFilter==="ALL"||p.team===teamFilter)&&
         p.player_name.toLowerCase().includes(search.toLowerCase())
       );
-      const grouped = filteredRoster.reduce((acc,p)=>{
-        (acc[p.team]=acc[p.team]||[]).push(p); return acc;
-      },{});
+      const grouped = filteredRoster.reduce((acc,p)=>{ (acc[p.team]=acc[p.team]||[]).push(p); return acc; },{});
 
       const currentCycleDay = gameData.length?gameData[gameData.length-1].cycleDay:0;
       const currentPhase = getPhase(currentCycleDay);
@@ -203,16 +306,26 @@
         return {day:i+1,avg:avg?+avg.toFixed(3):null,phase:ph.name,color:ph.color};
       });
 
+      // ── AI insight ──
       const fetchInsight = async()=>{
         setAiLoading(true);
+        const last10 = gameData.slice(-10);
+        const l10Hits = last10.reduce((a,g)=>a+g.hits,0);
+        const l10AB   = last10.reduce((a,g)=>a+g.ab,0);
+        const l10HR   = last10.reduce((a,g)=>a+g.hr,0);
         const ps = PHASE_CONFIG.map(p=>`${p.name}: AVG ${phaseAvg(gameData,p.name,"avg")}, OPS ${phaseAvg(gameData,p.name,"ops")}`).join("\n");
+        const ssLine = seasonStats
+          ? `Season ${SEASON}: AVG ${seasonStats.avg}, OPS ${seasonStats.ops}, HR ${seasonStats.hr}, RBI ${seasonStats.rbi}, G ${seasonStats.games}, AB ${seasonStats.ab}`
+          : `Games sampled: ${gameData.length}`;
+        const streakLine = `Last 10 games: ${l10Hits}H / ${l10AB}AB (.${l10AB>0?Math.round(l10Hits/l10AB*1000).toString().padStart(3,"0"):"000"}), ${l10HR} HR`;
+        const prompt = `You are a baseball analytics AI. Analyze the 28-day performance cycle for ${selectedPlayer?.player_name} (${selectedPlayer?.team||seasonStats?.team||""}):\n\n${ssLine}\n${streakLine}\n\nCycle phase averages:\n${ps}\n\nCurrent cycle position: ${currentPhase?.name} phase, day ${currentCycleDay+1}/${CYCLE_LENGTH}\n\nProvide a 3-4 sentence scouting insight covering: current cycle phase assessment, strongest vs weakest phase, fantasy/lineup recommendation, and one bold prediction for the next 7 games.`;
         try{
           const res = await fetch("https://api.anthropic.com/v1/messages",{
             method:"POST",
             headers:{"Content-Type":"application/json"},
             body:JSON.stringify({
-              model:"claude-sonnet-4-20250514",max_tokens:1000,
-              messages:[{role:"user",content:`You are a baseball analytics AI. Analyze 28-day performance cycle for ${selectedPlayer?.player_name} (${selectedPlayer?.team}):\n\n${ps}\n\nProvide 3-4 sentence scouting insight: strongest phase, weakest phase, fantasy recommendation, bold prediction.`}]
+              model:"claude-sonnet-4-20250514", max_tokens:1000,
+              messages:[{role:"user",content:prompt}]
             })
           });
           const d = await res.json();
@@ -221,6 +334,7 @@
         setAiLoading(false);
       };
 
+      // ── Styles ──
       const s = {
         card:{background:"#1e293b",borderRadius:12,padding:16},
         input:{background:"#0f172a",border:"1px solid #334155",borderRadius:6,padding:"7px 10px",color:"#f1f5f9",fontSize:12,width:"100%",boxSizing:"border-box"},
@@ -229,23 +343,49 @@
 
       return (
         <div style={{background:"#0f172a",minHeight:"100vh",color:"#f1f5f9",fontFamily:"Inter,sans-serif",padding:"20px 16px"}}>
-          <div style={{maxWidth:900,margin:"0 auto"}}>
+          <div style={{maxWidth:960,margin:"0 auto"}}>
+
+            {/* ── Header ── */}
             <div style={{marginBottom:20}}>
               <h1 style={{fontSize:22,fontWeight:800,margin:0}}>⚾ MLB Cycle Analyzer</h1>
-              <p style={{color:"#64748b",fontSize:13,margin:"4px 0 0"}}>28-day performance cycle · {roster.length} players loaded</p>
+              <p style={{color:"#64748b",fontSize:13,margin:"4px 0 0"}}>
+                28-day performance cycle · Season {SEASON} · MIN_AT_BATS: {MIN_AT_BATS} · {roster.length} players loaded
+              </p>
             </div>
 
+            {/* ── Source selector + credentials ── */}
             <div style={{...s.card,marginBottom:20}}>
-              <div style={{display:"flex",gap:8,marginBottom:12}}>
-                {["demo","live"].map(m=>(
-                  <button key={m} onClick={()=>setDataSource(m)} style={s.btn(dataSource===m,m==="live"?"#22c55e":"#3b82f6")}>
-                    {m==="demo"?"🎭 Demo Mode":"🔴 Live Supabase"}
+              <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+                {[["demo","🎭 Demo"],["mlb","⚾ MLB API"],["live","🔴 Supabase"]].map(([m,label])=>(
+                  <button key={m} onClick={()=>setDataSource(m)} style={s.btn(dataSource===m,m==="live"?"#22c55e":m==="mlb"?"#f59e0b":"#3b82f6")}>
+                    {label}
                   </button>
                 ))}
-                {rosterLoading&&<span style={{fontSize:12,color:"#64748b",alignSelf:"center"}}>Loading roster...</span>}
+                {rosterLoading&&<span style={{fontSize:12,color:"#64748b",alignSelf:"center"}}>Loading...</span>}
                 {dataSource==="live"&&!rosterLoading&&roster.length>0&&!rosterError&&
                   <span style={{fontSize:12,color:"#22c55e",alignSelf:"center"}}>✓ {roster.length} players</span>}
               </div>
+
+              {/* MLB API search bar */}
+              {dataSource==="mlb"&&(
+                <div style={{display:"flex",gap:8,marginBottom:mlbError?8:0}}>
+                  <input
+                    ref={mlbInputRef}
+                    value={mlbQuery}
+                    onChange={e=>setMlbQuery(e.target.value)}
+                    onKeyDown={e=>e.key==="Enter"&&handleMlbSearch()}
+                    placeholder="Search any MLB player (e.g. Aaron Judge)…"
+                    style={{...s.input,flex:1}}
+                  />
+                  <button onClick={handleMlbSearch} disabled={mlbSearching}
+                    style={{...s.btn(true,"#f59e0b"),whiteSpace:"nowrap",opacity:mlbSearching?0.6:1}}>
+                    {mlbSearching?"Searching…":"Search ↗"}
+                  </button>
+                </div>
+              )}
+              {mlbError&&<div style={{fontSize:12,color:"#fca5a5",marginTop:4}}>{mlbError}</div>}
+
+              {/* Supabase credentials */}
               {dataSource==="live"&&(
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr auto",gap:8}}>
                   <div>
@@ -254,7 +394,7 @@
                   </div>
                   <div>
                     <div style={{fontSize:11,color:"#64748b",marginBottom:4}}>Anon/Public API Key</div>
-                    <input type="password" value={sbKey} onChange={e=>setSbKey(e.target.value)} placeholder="eyJhbGci..." style={s.input}/>
+                    <input type="password" value={sbKey} onChange={e=>setSbKey(e.target.value)} placeholder="eyJhbGci…" style={s.input}/>
                   </div>
                   <div style={{alignSelf:"flex-end"}}>
                     <button onClick={saveCredentials} style={{...s.btn(true,"#22c55e"),padding:"8px 16px"}}>Connect</button>
@@ -268,17 +408,24 @@
               )}
             </div>
 
+            {/* ── Main layout ── */}
             <div style={{display:"grid",gridTemplateColumns:"260px 1fr",gap:16,alignItems:"start"}}>
+
+              {/* ── Sidebar ── */}
               <div style={{...s.card,padding:12}}>
                 <div style={{fontSize:12,fontWeight:700,color:"#94a3b8",marginBottom:10}}>SELECT PLAYER</div>
-                <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Search player..." style={{...s.input,marginBottom:8}}/>
-                <select value={teamFilter} onChange={e=>setTeamFilter(e.target.value)} style={{...s.input,marginBottom:10,cursor:"pointer"}}>
-                  {teams.map(t=><option key={t} value={t}>{t==="ALL"?"All Teams":t}</option>)}
-                </select>
-                <div style={{maxHeight:480,overflowY:"auto",fontSize:12}}>
+                <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Search player…" style={{...s.input,marginBottom:8}}/>
+                {dataSource!=="mlb"&&(
+                  <select value={teamFilter} onChange={e=>setTeamFilter(e.target.value)} style={{...s.input,marginBottom:10,cursor:"pointer"}}>
+                    {teams.map(t=><option key={t} value={t}>{t==="ALL"?"All Teams":t}</option>)}
+                  </select>
+                )}
+                <div style={{maxHeight:500,overflowY:"auto",fontSize:12}}>
                   {Object.keys(grouped).sort().map(team=>(
                     <div key={team} style={{marginBottom:10}}>
-                      <div style={{fontSize:10,fontWeight:800,color:"#475569",textTransform:"uppercase",letterSpacing:1,padding:"4px 6px",marginBottom:2}}>{team}</div>
+                      {dataSource!=="mlb"&&(
+                        <div style={{fontSize:10,fontWeight:800,color:"#475569",textTransform:"uppercase",letterSpacing:1,padding:"4px 6px",marginBottom:2}}>{team}</div>
+                      )}
                       {grouped[team].map(p=>(
                         <div key={p.player_name} onClick={()=>setSelectedPlayer(p)}
                           style={{padding:"7px 10px",borderRadius:6,cursor:"pointer",marginBottom:1,
@@ -289,48 +436,74 @@
                       ))}
                     </div>
                   ))}
-                  {Object.keys(grouped).length===0&&<div style={{color:"#475569",fontStyle:"italic",padding:8}}>No players match.</div>}
+                  {Object.keys(grouped).length===0&&(
+                    <div style={{color:"#475569",fontStyle:"italic",padding:8}}>
+                      {dataSource==="mlb"?"Search a player above to add them.":"No players match."}
+                    </div>
+                  )}
                 </div>
               </div>
 
+              {/* ── Main panel ── */}
               <div>
                 {!selectedPlayer?(
-                  <div style={{...s.card,textAlign:"center",padding:60,color:"#64748b"}}>Select a player to begin</div>
+                  <div style={{...s.card,textAlign:"center",padding:60,color:"#64748b"}}>
+                    {dataSource==="mlb"?"Search a player above to load their MLB stats.":"Select a player to begin"}
+                  </div>
                 ):dataLoading?(
-                  <div style={{...s.card,textAlign:"center",padding:60,color:"#64748b"}}>Loading game data...</div>
+                  <div style={{...s.card,textAlign:"center",padding:60,color:"#64748b"}}>Loading game data…</div>
                 ):(
                   <>
-                    <div style={{...s.card,marginBottom:12,borderLeft:`4px solid ${currentPhase?.color}`,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:12}}>
+                    {/* Player header */}
+                    <div style={{...s.card,marginBottom:12,borderLeft:`4px solid ${currentPhase?.color}`,display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:12}}>
                       <div>
                         <div style={{fontSize:18,fontWeight:800}}>{selectedPlayer.player_name}</div>
-                        <div style={{fontSize:12,color:"#64748b"}}>{selectedPlayer.team}</div>
+                        <div style={{fontSize:12,color:"#64748b"}}>
+                          {seasonStats?.team||selectedPlayer.team}
+                          {seasonStats?.pos?` · ${seasonStats.pos}`:""}
+                          {" · "}{SEASON} season
+                        </div>
                         <div style={{fontSize:13,color:currentPhase?.color,fontWeight:700,marginTop:4}}>
                           {currentPhase?.name} Phase · Day {currentCycleDay+1}/{CYCLE_LENGTH}
                         </div>
                       </div>
-                      <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
-                        {PHASE_CONFIG.map(p=>(
-                          <div key={p.name} style={{textAlign:"center"}}>
-                            <div style={{fontSize:10,color:p.color,fontWeight:700}}>{p.name}</div>
-                            <div style={{fontSize:15,fontWeight:800}}>{phaseAvg(gameData,p.name,"avg")}</div>
-                            <div style={{fontSize:10,color:"#64748b"}}>AVG</div>
-                          </div>
-                        ))}
-                      </div>
+                      {/* Season stat pills */}
+                      {seasonStats&&(
+                        <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                          {[["AVG",seasonStats.avg],["OPS",seasonStats.ops],["HR",seasonStats.hr],["RBI",seasonStats.rbi],["G",seasonStats.games]].map(([lbl,val])=>(
+                            <div key={lbl} style={{background:"#0f172a",borderRadius:8,padding:"6px 12px",textAlign:"center",minWidth:50}}>
+                              <div style={{fontSize:10,color:"#64748b"}}>{lbl}</div>
+                              <div style={{fontSize:16,fontWeight:800}}>{val}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {/* Phase cycle averages (when no season stats) */}
+                      {!seasonStats&&(
+                        <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
+                          {PHASE_CONFIG.map(p=>(
+                            <div key={p.name} style={{textAlign:"center"}}>
+                              <div style={{fontSize:10,color:p.color,fontWeight:700}}>{p.name}</div>
+                              <div style={{fontSize:15,fontWeight:800}}>{phaseAvg(gameData,p.name,"avg")}</div>
+                              <div style={{fontSize:10,color:"#64748b"}}>AVG</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
 
-                    <div style={{display:"flex",gap:6,marginBottom:12}}>
-                      {["timeline","cycle","phases"].map(v=>(
-                        <button key={v} onClick={()=>setView(v)} style={s.btn(view===v)}>
-                          {v==="timeline"?"📈 Timeline":v==="cycle"?"🔄 Cycle":"📊 Phases"}
-                        </button>
+                    {/* View tabs */}
+                    <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
+                      {[["timeline","📈 Timeline"],["cycle","🔄 Cycle"],["phases","📊 Phases"],["streak","🔥 Streak"]].map(([v,label])=>(
+                        <button key={v} onClick={()=>setView(v)} style={s.btn(view===v)}>{label}</button>
                       ))}
                     </div>
 
+                    {/* Timeline view */}
                     {view==="timeline"&&(
                       <div style={{...s.card,padding:"20px 12px 12px"}}>
-                        <ResponsiveContainer width="100%" height={200}>
-                          <AreaChart data={gameData} margin={{left:-10,right:10}}>
+                        <ResponsiveContainer width="100%" height={220}>
+                          <AreaChart data={gameData.slice(-60)} margin={{left:-10,right:10}}>
                             <defs>
                               <linearGradient id="ag" x1="0" y1="0" x2="0" y2="1">
                                 <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
@@ -338,12 +511,12 @@
                               </linearGradient>
                             </defs>
                             <CartesianGrid strokeDasharray="3 3" stroke="#334155"/>
-                            <XAxis dataKey="date" tick={{fontSize:10,fill:"#64748b"}} interval={14}/>
-                            <YAxis domain={[0.150,0.450]} tick={{fontSize:10,fill:"#64748b"}}/>
+                            <XAxis dataKey="date" tick={{fontSize:10,fill:"#64748b"}} interval={Math.floor(gameData.length/8)}/>
+                            <YAxis domain={[0.100,0.500]} tick={{fontSize:10,fill:"#64748b"}}/>
                             <Tooltip content={<CustomTooltip/>}/>
-                            <ReferenceLine y={0.260} stroke="#64748b" strokeDasharray="4 4"/>
+                            <ReferenceLine y={0.260} stroke="#64748b" strokeDasharray="4 4" label={{value:".260",fontSize:9,fill:"#64748b"}}/>
                             <Area type="monotone" dataKey="avg" stroke="#3b82f6" strokeWidth={2} fill="url(#ag)"
-                              dot={({cx,cy,payload})=><circle key={payload.date} cx={cx} cy={cy} r={3} fill={payload.phaseColor} stroke="none"/>}/>
+                              dot={({cx,cy,payload})=><circle key={payload.date+payload.cycleDay} cx={cx} cy={cy} r={3} fill={payload.phaseColor} stroke="none"/>}/>
                           </AreaChart>
                         </ResponsiveContainer>
                         <div style={{display:"flex",gap:12,justifyContent:"center",marginTop:10,flexWrap:"wrap"}}>
@@ -357,8 +530,10 @@
                       </div>
                     )}
 
+                    {/* Cycle view */}
                     {view==="cycle"&&(
                       <div style={{...s.card,padding:"20px 12px 12px"}}>
+                        <div style={{fontSize:11,color:"#64748b",marginBottom:8}}>Average batting avg by cycle day (aggregated across all games)</div>
                         <ResponsiveContainer width="100%" height={200}>
                           <AreaChart data={cycleData} margin={{left:-10,right:10}}>
                             <defs>
@@ -369,8 +544,8 @@
                             </defs>
                             <CartesianGrid strokeDasharray="3 3" stroke="#334155"/>
                             <XAxis dataKey="day" tick={{fontSize:10,fill:"#64748b"}}/>
-                            <YAxis domain={[0.200,0.400]} tick={{fontSize:10,fill:"#64748b"}}/>
-                            <Tooltip formatter={v=>[v,"AVG"]} contentStyle={{background:"#1e293b",border:"1px solid #334155",borderRadius:8,fontSize:12}}/>
+                            <YAxis domain={[0.150,0.450]} tick={{fontSize:10,fill:"#64748b"}}/>
+                            <Tooltip formatter={v=>[v?.toFixed(3)||"—","AVG"]} contentStyle={{background:"#1e293b",border:"1px solid #334155",borderRadius:8,fontSize:12}}/>
                             <ReferenceLine x={currentCycleDay+1} stroke="#f59e0b" strokeWidth={2} label={{value:"TODAY",fontSize:10,fill:"#f59e0b"}}/>
                             <Area type="monotone" dataKey="avg" stroke="#22c55e" strokeWidth={2.5} fill="url(#cg)"
                               dot={({cx,cy,payload})=><circle key={payload.day} cx={cx} cy={cy} r={4} fill={payload.color} stroke="#0f172a" strokeWidth={1}/>}/>
@@ -387,13 +562,18 @@
                       </div>
                     )}
 
+                    {/* Phases view */}
                     {view==="phases"&&(
                       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
                         {PHASE_CONFIG.map(p=>{
                           const pg = gameData.filter(g=>g.phase===p.name);
+                          const isActive = p.name===currentPhase?.name;
                           return (
-                            <div key={p.name} style={{...s.card,borderTop:`3px solid ${p.color}`}}>
-                              <div style={{fontWeight:700,color:p.color,fontSize:14}}>{p.name}</div>
+                            <div key={p.name} style={{...s.card,borderTop:`3px solid ${p.color}`,outline:isActive?`1px solid ${p.color}`:undefined}}>
+                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                                <div style={{fontWeight:700,color:p.color,fontSize:14}}>{p.name}</div>
+                                {isActive&&<span style={{fontSize:10,background:p.color+"33",color:p.color,padding:"2px 7px",borderRadius:10}}>NOW</span>}
+                              </div>
                               <div style={{fontSize:11,color:"#64748b",marginBottom:10}}>{p.desc}</div>
                               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
                                 {[["AVG",phaseAvg(gameData,p.name,"avg")],["OPS",phaseAvg(gameData,p.name,"ops")],
@@ -410,16 +590,62 @@
                       </div>
                     )}
 
+                    {/* Streak view — last 20 games bar chart */}
+                    {view==="streak"&&(
+                      <div style={{...s.card,padding:"20px 12px 12px"}}>
+                        <div style={{fontSize:11,color:"#64748b",marginBottom:12}}>Last {Math.min(gameData.length,20)} games — hits per game, colored by cycle phase</div>
+                        <ResponsiveContainer width="100%" height={160}>
+                          <BarChart data={gameData.slice(-20)} margin={{left:-10,right:10}}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#334155"/>
+                            <XAxis dataKey="date" tick={{fontSize:9,fill:"#64748b"}}/>
+                            <YAxis tick={{fontSize:10,fill:"#64748b"}} allowDecimals={false}/>
+                            <Tooltip content={<CustomTooltip/>}/>
+                            <Bar dataKey="hits" radius={[3,3,0,0]}>
+                              {gameData.slice(-20).map((g,i)=>(
+                                <Cell key={i} fill={g.phaseColor}/>
+                              ))}
+                            </Bar>
+                          </BarChart>
+                        </ResponsiveContainer>
+                        {/* Recent game log table */}
+                        <div style={{marginTop:14,overflowX:"auto"}}>
+                          <table style={{width:"100%",fontSize:11,borderCollapse:"collapse"}}>
+                            <thead>
+                              <tr style={{color:"#64748b"}}>
+                                {["Date","AB","H","HR","RBI","AVG","Phase"].map(h=>(
+                                  <td key={h} style={{padding:"4px 8px",borderBottom:"1px solid #334155",textAlign:h==="Date"||h==="Phase"?"left":"center"}}>{h}</td>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {gameData.slice(-15).reverse().map((g,i)=>(
+                                <tr key={i} style={{borderBottom:"1px solid #1e293b"}}>
+                                  <td style={{padding:"4px 8px",color:"#94a3b8"}}>{g.date}</td>
+                                  <td style={{padding:"4px 8px",textAlign:"center"}}>{g.ab}</td>
+                                  <td style={{padding:"4px 8px",textAlign:"center",fontWeight:g.hits>=2?700:400,color:g.hits>=2?"#22c55e":"#f1f5f9"}}>{g.hits}</td>
+                                  <td style={{padding:"4px 8px",textAlign:"center",color:g.hr>0?"#f59e0b":"#f1f5f9",fontWeight:g.hr>0?700:400}}>{g.hr}</td>
+                                  <td style={{padding:"4px 8px",textAlign:"center"}}>{g.rbi||0}</td>
+                                  <td style={{padding:"4px 8px",textAlign:"center"}}>{g.avg.toFixed(3)}</td>
+                                  <td style={{padding:"4px 8px",color:g.phaseColor,fontWeight:700}}>{g.phase}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* AI Insight panel */}
                     <div style={{...s.card,marginTop:12}}>
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
                         <div style={{fontWeight:700,fontSize:13}}>🤖 AI Scouting Insight</div>
-                        <button onClick={fetchInsight} disabled={aiLoading} style={s.btn(!aiLoading)}>
-                          {aiLoading?"Analyzing...":`Analyze ${selectedPlayer.player_name.split(" ")[1]}`}
+                        <button onClick={fetchInsight} disabled={aiLoading} style={{...s.btn(!aiLoading),opacity:aiLoading?0.6:1}}>
+                          {aiLoading?"Analyzing…":`Analyze ${selectedPlayer.player_name.split(" ").pop()}`}
                         </button>
                       </div>
                       {aiInsight
                         ?<p style={{fontSize:13,color:"#cbd5e1",lineHeight:1.7,margin:0}}>{aiInsight}</p>
-                        :<p style={{fontSize:13,color:"#475569",fontStyle:"italic",margin:0}}>Click Analyze to generate a Claude-powered scouting report.</p>}
+                        :<p style={{fontSize:13,color:"#475569",fontStyle:"italic",margin:0}}>Click Analyze to generate a Claude-powered scouting report using {dataSource==="mlb"?"live MLB":"sampled"} data.</p>}
                     </div>
                   </>
                 )}
