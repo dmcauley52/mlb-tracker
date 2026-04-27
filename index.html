@@ -65,13 +65,28 @@
     function computePredictionScore(playerName, teamName, gameData, seasonStats) {
       if (!gameData || gameData.length < 3) return { score:50, label:"Insufficient data", tier:"neutral", breakdown:{phaseScore:0,trendScore:0,opsScore:0,momentumScore:0,matchupScore:0}, opponents:[] };
 
-      // 1. Cycle phase of NEXT game (0-30)
-      const lastCycleDay  = gameData[gameData.length - 1]?.cycleDay ?? 0;
-      const nextCycleDay  = (lastCycleDay + 1) % CYCLE_LENGTH;
-      const nextPhase     = getPhase(nextCycleDay);
-      const phaseScore    = nextPhase.name === "Peak"      ? 30
-                          : nextPhase.name === "Ovulation" ? 22
-                          : nextPhase.name === "Luteal"    ? 12 : 4;
+      // 1. Cycle phase score using FFT analysis when available, else fixed 28-day (0-30)
+      let phaseScore = 15; // default neutral
+      const analysis = analyzePlayerCycles(gameData);
+      if (analysis && analysis.forecastValues.length > 0) {
+        // Use gradient of forecast: rising = peak approaching, falling = trough approaching
+        const f = analysis.forecastValues;
+        const trend3 = f.slice(0,3).reduce((a,b)=>a+b,0)/3;
+        const trend3b = f.slice(1,4).reduce((a,b)=>a+b,0)/3;
+        const slope = trend3b - trend3;
+        // Absolute forecast level vs mean also matters
+        const level = f[0] - analysis.mean;
+        phaseScore = slope > 0.010  ? 30 : slope > 0.004 ? 26
+                   : slope > 0       ? 20 : slope > -0.004 ? 14
+                   : slope > -0.010  ? 8  : 4;
+        // Bonus: if forecast is above mean
+        if (level > 0.015) phaseScore = Math.min(30, phaseScore + 4);
+      } else {
+        const lastCycleDay  = gameData[gameData.length - 1]?.cycleDay ?? 0;
+        const nextCycleDay  = (lastCycleDay + 1) % CYCLE_LENGTH;
+        const nextPhase     = getPhase(nextCycleDay);
+        phaseScore = nextPhase.name === "Peak" ? 30 : nextPhase.name === "Ovulation" ? 22 : nextPhase.name === "Luteal" ? 12 : 4;
+      }
 
       // 2. Last-5 batting avg trend (0-25)
       const last5     = gameData.slice(-5);
@@ -104,6 +119,140 @@
     }
 
     const TIER_COLOR = { hot:"#22c55e", warm:"#f59e0b", neutral:"#64748b", cold:"#ef4444" };
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // TIME-SERIES CYCLE ANALYSIS ENGINE
+    // ═══════════════════════════════════════════════════════════════════════════
+    //
+    // Full DFT (O(n²)) — sufficient for game-log lengths (≤162 games).
+    // Returns complex spectrum so we can rank by amplitude and reconstruct.
+    function dft(signal) {
+      const N = signal.length;
+      const re = new Float64Array(N), im = new Float64Array(N);
+      for (let k = 0; k < N; k++) {
+        for (let n = 0; n < N; n++) {
+          const angle = (2 * Math.PI * k * n) / N;
+          re[k] += signal[n] * Math.cos(angle);
+          im[k] -= signal[n] * Math.sin(angle);
+        }
+        re[k] /= N; im[k] /= N;
+      }
+      return { re, im };
+    }
+
+    // Reconstruct signal at arbitrary positions using a subset of frequency components.
+    // components: [{ k, re, im }]  positions: array of x values (can extend beyond N for forecast)
+    function reconstructAt(components, N, positions) {
+      return positions.map(x => {
+        let v = 0;
+        for (const { k, re, im } of components) {
+          const angle = (2 * Math.PI * k * x) / N;
+          v += re * Math.cos(angle) - im * Math.sin(angle);
+        }
+        return v;
+      });
+    }
+
+    // Main analysis function — call once per player when gameData changes.
+    // Returns:
+    //   dominantCycles  : [{ periodDays, amplitude, pctVariance }] top cycles, sorted by amplitude
+    //   reconstructed   : Float64Array, same length as signal, best-fit reconstruction
+    //   forecast        : array of { x, avg } for FORECAST_DAYS ahead
+    //   components      : the kept frequency components
+    //   meanAvg         : mean batting average (DC offset)
+    //   r2              : R² of reconstruction vs actual signal
+    const FORECAST_DAYS = 14;
+    const MAX_COMPONENTS = 5;     // keep top-N frequencies by amplitude
+    const MIN_PERIOD = 4;         // ignore cycles shorter than 4 games (noise)
+    const MIN_AMPLITUDE = 0.005;  // ignore tiny fluctuations (<0.5 pts avg)
+
+    function analyzePlayerCycles(gameData) {
+      const N = gameData.length;
+      if (N < 10) return null;
+
+      // Build mean-subtracted batting average signal
+      const raw = gameData.map(g => g.avg);
+      const mean = raw.reduce((a,b)=>a+b,0) / N;
+      const signal = raw.map(v => v - mean);
+
+      const { re, im } = dft(signal);
+
+      // Build amplitude spectrum for k=1..floor(N/2) (positive frequencies only)
+      const spectrum = [];
+      for (let k = 1; k <= Math.floor(N / 2); k++) {
+        const amp = 2 * Math.sqrt(re[k]*re[k] + im[k]*im[k]); // ×2 for one-sided
+        const periodDays = N / k;
+        if (periodDays < MIN_PERIOD) continue;
+        spectrum.push({ k, amp, periodDays, re: re[k], im: im[k] });
+      }
+      spectrum.sort((a,b) => b.amp - a.amp);
+
+      // Total power (for variance explained)
+      const totalPower = spectrum.reduce((s,c) => s + c.amp*c.amp, 0) || 1;
+
+      // Keep top components above amplitude threshold
+      const kept = spectrum
+        .filter(c => c.amp >= MIN_AMPLITUDE)
+        .slice(0, MAX_COMPONENTS);
+
+      if (kept.length === 0) return null;
+
+      // Build components array including DC (k=0)
+      const components = [{ k:0, re: mean, im: 0 }, ...kept];
+
+      // Reconstruct over historical range
+      const positions = Array.from({ length: N }, (_,i) => i);
+      const reconstructed = reconstructAt(components, N, positions);
+
+      // R² vs actual
+      const ssTot = raw.reduce((s,v) => s + (v-mean)**2, 0);
+      const ssRes = raw.reduce((s,v,i) => s + (v-reconstructed[i])**2, 0);
+      const r2 = ssTot > 0 ? Math.max(0, 1 - ssRes/ssTot) : 0;
+
+      // Forecast: extend reconstruction FORECAST_DAYS beyond last game
+      const forecastPositions = Array.from({ length: FORECAST_DAYS }, (_,i) => N + i);
+      const forecastValues = reconstructAt(components, N, forecastPositions);
+
+      const dominantCycles = kept.map(c => ({
+        periodDays: +c.periodDays.toFixed(1),
+        amplitude:  +c.amp.toFixed(4),
+        pctVariance: +(100 * c.amp*c.amp / totalPower).toFixed(1),
+      }));
+
+      return { dominantCycles, reconstructed, forecastValues, components, N, mean, r2 };
+    }
+
+    // Build chart-ready data arrays from analysis result
+    function buildCycleChartData(gameData, analysis) {
+      if (!analysis) return { historical: [], forecast: [] };
+      const { reconstructed, forecastValues, N } = analysis;
+
+      const historical = gameData.map((g,i) => ({
+        date:   g.date,
+        actual: +g.avg.toFixed(3),
+        fitted: +Math.max(0.050, reconstructed[i]).toFixed(3),
+      }));
+
+      const lastDate = gameData.length ? gameData[gameData.length-1].date : "Future";
+      const forecast = forecastValues.map((v,i) => ({
+        date:   `+${i+1}d`,
+        fitted: +Math.max(0.050, v).toFixed(3),
+        isForecast: true,
+      }));
+
+      return { historical, forecast };
+    }
+
+    // Map a position within the player's dominant cycle to a phase color
+    function cyclePhaseColor(posInCycle, cyclePeriod) {
+      const pct = (posInCycle % cyclePeriod) / cyclePeriod;
+      if (pct < 0.25)  return "#22c55e"; // Peak
+      if (pct < 0.50)  return "#3b82f6"; // Rising
+      if (pct < 0.75)  return "#f59e0b"; // Declining
+      return "#ef4444";                   // Trough
+    }
+
+
 
     // MLB player ID lookup
     const MLB_IDS = {
@@ -301,6 +450,7 @@
       const [mlbError,setMlbError]     = useState("");
       const [predCache,setPredCache]   = useState({});
       const [currentPred,setCurrentPred] = useState(null);
+      const [cycleAnalysis,setCycleAnalysis] = useState(null);
       const mlbRef = useRef(null);
 
       const loadRoster = useCallback(async()=>{
@@ -327,7 +477,7 @@
 
       const loadGames = useCallback(async()=>{
         if(!selectedPlayer) return;
-        setDataLoading(true); setDataError(""); setAiInsight(""); setSeasonStats(null); setCurrentPred(null);
+        setDataLoading(true); setDataError(""); setAiInsight(""); setSeasonStats(null); setCurrentPred(null); setCycleAnalysis(null);
         try{
           let games=[], ss=null, teamName=selectedPlayer.team;
           if(dataSource==="mlb"){
@@ -352,6 +502,8 @@
             setSeasonStats(ss);
           }
           setGameData(games);
+          const analysis = analyzePlayerCycles(games);
+          setCycleAnalysis(analysis);
           const pred = computePredictionScore(selectedPlayer.player_name, teamName||selectedPlayer.team, games, ss);
           setCurrentPred(pred);
           setPredCache(prev=>({...prev,[selectedPlayer.player_name]:pred}));
@@ -550,7 +702,9 @@
                         <div style={{fontSize:18,fontWeight:800}}>{selectedPlayer.player_name}</div>
                         <div style={{fontSize:12,color:"#64748b"}}>{seasonStats?.team||selectedPlayer.team}{seasonStats?.pos?` · ${seasonStats.pos}`:""} · {SEASON}</div>
                         <div style={{fontSize:13,color:currentPhase?.color,fontWeight:700,marginTop:4}}>
-                          {currentPhase?.name} Phase · Day {currentCycleDay+1}/{CYCLE_LENGTH}
+                          {cycleAnalysis
+                            ? `Detected cycles: ${cycleAnalysis.dominantCycles.slice(0,2).map(c=>c.periodDays+"d").join(", ")} · R²: ${cycleAnalysis.r2.toFixed(2)}`
+                            : `${currentPhase?.name} Phase · Day ${currentCycleDay+1}/${CYCLE_LENGTH}`}
                         </div>
                         {currentPred&&(
                           <div style={{display:"flex",alignItems:"center",gap:10,marginTop:8}}>
@@ -603,32 +757,116 @@
                       </div>
                     )}
 
-                    {/* Cycle */}
-                    {view==="cycle"&&(
+                    {/* Cycle — FFT-based player-specific cycle analysis */}
+                    {view==="cycle"&&(()=>{
+                      const chartData = buildCycleChartData(gameData, cycleAnalysis);
+                      const allPoints = [...chartData.historical, ...chartData.forecast];
+                      const yVals = allPoints.map(p=>p.actual||p.fitted).filter(Boolean);
+                      const yMin  = Math.max(0.050, +(Math.min(...yVals)-0.030).toFixed(3));
+                      const yMax  = Math.min(0.600, +(Math.max(...yVals)+0.030).toFixed(3));
+                      return(
                       <div style={{...s.card,padding:"20px 12px 12px"}}>
-                        <div style={{fontSize:11,color:"#64748b",marginBottom:8}}>Average batting avg by cycle day</div>
-                        <ResponsiveContainer width="100%" height={200}>
-                          <AreaChart data={cycleData} margin={{left:-10,right:10}}>
-                            <defs><linearGradient id="cg" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#22c55e" stopOpacity={0.3}/><stop offset="95%" stopColor="#22c55e" stopOpacity={0}/></linearGradient></defs>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#334155"/>
-                            <XAxis dataKey="day" tick={{fontSize:10,fill:"#64748b"}}/>
-                            <YAxis domain={[0.150,0.450]} tick={{fontSize:10,fill:"#64748b"}}/>
-                            <Tooltip formatter={v=>[v?.toFixed(3)||"—","AVG"]} contentStyle={{background:"#1e293b",border:"1px solid #334155",borderRadius:8,fontSize:12}}/>
-                            <ReferenceLine x={currentCycleDay+1} stroke="#f59e0b" strokeWidth={2} label={{value:"TODAY",fontSize:10,fill:"#f59e0b"}}/>
-                            <Area type="monotone" dataKey="avg" stroke="#22c55e" strokeWidth={2.5} fill="url(#cg)"
-                              dot={({cx,cy,payload})=><circle key={payload.day} cx={cx} cy={cy} r={4} fill={payload.color} stroke="#0f172a" strokeWidth={1}/>}/>
-                          </AreaChart>
-                        </ResponsiveContainer>
-                        <div style={{display:"flex",marginTop:12,borderRadius:8,overflow:"hidden"}}>
-                          {PHASE_CONFIG.map(p=>(
-                            <div key={p.name} style={{flex:1,background:p.color+"22",borderTop:`3px solid ${p.color}`,padding:"8px 6px",textAlign:"center"}}>
-                              <div style={{fontSize:11,fontWeight:700,color:p.color}}>{p.name}</div>
-                              <div style={{fontSize:10,color:"#64748b"}}>Days {p.start+1}–{p.end+1}</div>
+                        {!cycleAnalysis ? (
+                          <div style={{color:"#64748b",fontSize:12,padding:20,textAlign:"center"}}>
+                            Not enough data for cycle analysis — need at least 10 games.
+                          </div>
+                        ) : (
+                          <>
+                            {/* Cycle summary chips */}
+                            <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
+                              <span style={{fontSize:11,color:"#64748b",marginRight:4}}>Detected cycles:</span>
+                              {cycleAnalysis.dominantCycles.map((c,i)=>(
+                                <span key={i} style={{fontSize:11,fontWeight:700,padding:"2px 10px",borderRadius:10,
+                                  background:["#22c55e22","#3b82f622","#f59e0b22","#ef444422","#a855f722"][i]||"#33415522",
+                                  color:["#22c55e","#3b82f6","#f59e0b","#ef4444","#a855f7"][i]||"#64748b"}}>
+                                  {c.periodDays}d <span style={{fontWeight:400,opacity:0.7}}>({c.pctVariance}%)</span>
+                                </span>
+                              ))}
+                              <span style={{fontSize:11,color:"#475569",marginLeft:"auto"}}>R² {cycleAnalysis.r2.toFixed(2)}</span>
                             </div>
-                          ))}
-                        </div>
+
+                            {/* Combined historical + forecast chart */}
+                            <ResponsiveContainer width="100%" height={220}>
+                              <AreaChart margin={{left:-10,right:10}}>
+                                <defs>
+                                  <linearGradient id="actualGrad" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%"  stopColor="#3b82f6" stopOpacity={0.15}/>
+                                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                                  </linearGradient>
+                                  <linearGradient id="fitGrad" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%"  stopColor="#22c55e" stopOpacity={0.25}/>
+                                    <stop offset="95%" stopColor="#22c55e" stopOpacity={0}/>
+                                  </linearGradient>
+                                  <linearGradient id="fcastGrad" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%"  stopColor="#f59e0b" stopOpacity={0.30}/>
+                                    <stop offset="95%" stopColor="#f59e0b" stopOpacity={0}/>
+                                  </linearGradient>
+                                </defs>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#334155"/>
+                                <XAxis dataKey="date" data={allPoints} tick={{fontSize:9,fill:"#64748b"}}
+                                  interval={Math.max(1,Math.floor(allPoints.length/8))}/>
+                                <YAxis domain={[yMin,yMax]} tick={{fontSize:10,fill:"#64748b"}}/>
+                                <Tooltip
+                                  content={({active,payload,label})=>{
+                                    if(!active||!payload?.length) return null;
+                                    const isFc = payload[0]?.payload?.isForecast;
+                                    return(
+                                      <div style={{background:"#1e293b",border:`1px solid ${isFc?"#f59e0b":"#334155"}`,borderRadius:8,padding:"8px 12px",fontSize:12}}>
+                                        <div style={{color:"#94a3b8",marginBottom:3}}>{label}{isFc?" (forecast)":""}</div>
+                                        {payload.map(p=>(
+                                          <div key={p.name} style={{color:p.color}}>
+                                            {p.name==="actual"?"Actual":p.name==="fitted"?"FFT fit":"Forecast"}: <b>{p.value?.toFixed(3)}</b>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    );
+                                  }}
+                                />
+                                <ReferenceLine x={gameData[gameData.length-1]?.date} stroke="#f59e0b" strokeDasharray="3 3"
+                                  label={{value:"NOW",fontSize:9,fill:"#f59e0b",position:"insideTopRight"}}/>
+                                {/* Actual avg — blue dots */}
+                                <Area data={chartData.historical} type="monotone" dataKey="actual"
+                                  stroke="#3b82f6" strokeWidth={1.5} fill="url(#actualGrad)" dot={{r:2,fill:"#3b82f6",stroke:"none"}}/>
+                                {/* FFT reconstruction — green line */}
+                                <Area data={chartData.historical} type="monotone" dataKey="fitted"
+                                  stroke="#22c55e" strokeWidth={2} strokeDasharray="none" fill="url(#fitGrad)" dot={false}/>
+                                {/* Forecast — amber dashed */}
+                                <Area data={chartData.forecast} type="monotone" dataKey="fitted"
+                                  stroke="#f59e0b" strokeWidth={2} strokeDasharray="5 3" fill="url(#fcastGrad)" dot={false}/>
+                              </AreaChart>
+                            </ResponsiveContainer>
+
+                            {/* Legend */}
+                            <div style={{display:"flex",gap:16,justifyContent:"center",marginTop:10,flexWrap:"wrap"}}>
+                              {[["#3b82f6","Actual avg"],["#22c55e","FFT reconstruction"],["#f59e0b","14-day forecast"]].map(([c,l])=>(
+                                <div key={l} style={{display:"flex",alignItems:"center",gap:5,fontSize:11}}>
+                                  <div style={{width:24,height:2,background:c,borderRadius:1}}/><span style={{color:"#94a3b8"}}>{l}</span>
+                                </div>
+                              ))}
+                            </div>
+
+                            {/* Dominant cycle cards */}
+                            <div style={{display:"grid",gridTemplateColumns:`repeat(${Math.min(cycleAnalysis.dominantCycles.length,3)},1fr)`,gap:8,marginTop:14}}>
+                              {cycleAnalysis.dominantCycles.slice(0,3).map((c,i)=>{
+                                const colors=["#22c55e","#3b82f6","#f59e0b","#ef4444","#a855f7"];
+                                return(
+                                  <div key={i} style={{background:"#0f172a",borderRadius:8,padding:"10px 12px",borderTop:`2px solid ${colors[i]}`}}>
+                                    <div style={{fontSize:10,color:"#64748b",marginBottom:2}}>Cycle {i+1}</div>
+                                    <div style={{fontSize:18,fontWeight:800,color:colors[i]}}>{c.periodDays}d</div>
+                                    <div style={{fontSize:10,color:"#64748b",marginTop:2}}>{c.pctVariance}% variance · amp {c.amplitude.toFixed(3)}</div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+
+                            <div style={{marginTop:10,padding:"8px 10px",background:"#0f172a",borderRadius:6,fontSize:10,color:"#475569",lineHeight:1.5}}>
+                              DFT on {gameData.length}-game batting avg signal. Top {cycleAnalysis.dominantCycles.length} frequency component{cycleAnalysis.dominantCycles.length!==1?"s":""} kept (amplitude ≥ 0.005, period ≥ 4 games). Forecast extrapolates these cycles {FORECAST_DAYS} games forward.
+                            </div>
+                          </>
+                        )}
                       </div>
-                    )}
+                      );
+                    })()}
 
                     {/* Phases */}
                     {view==="phases"&&(
