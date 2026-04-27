@@ -1,13 +1,39 @@
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Run mode: nightly or backfill'
+        required: true
+        default: 'nightly'
+        type: choice
+        options:
+          - nightly
+          - backfill
   schedule:
-    - cron: '0 7 * * *'  # 2AM EST = 7AM UTC
+    - cron: '0 7 * * *'
+
 jobs:
   fetch:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: pip install mlb-statsapi pandas psycopg2-binary python-dotenv
-      - run: python fetch_stats.py
-    env:
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install mlb-statsapi pandas psycopg2-binary python-dotenv
+
+      - name: Run backfill (full season)
+        if: github.event.inputs.mode == 'backfill'
+        run: python backfill_stats.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: Run nightly fetch (yesterday only)
+        if: github.event.inputs.mode != 'backfill' 
+        run: python fetch_stats.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
