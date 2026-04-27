@@ -1,16 +1,19 @@
-import statsapi
 import psycopg2
 import os
 import time
+import json
+import urllib.request
 from dotenv import load_dotenv
 load_dotenv()
 
 SEASON = 2026
-MIN_AT_BATS = 100
+MIN_AT_BATS = 20
 
 conn = psycopg2.connect(os.getenv("DATABASE_URL"))
 cur = conn.cursor()
 
+# ── Step 1: Get qualified batters ──────────────────────────────────────
+import statsapi
 print("Fetching qualified batters...")
 leaders = statsapi.get("stats", {
     "stats": "season",
@@ -18,11 +21,11 @@ leaders = statsapi.get("stats", {
     "season": SEASON,
     "playerPool": "ALL",
     "limit": 500,
-    "fields": "stats,splits,stat,atBats,player,id,fullName"
 })
 
+splits = leaders.get("stats", [{}])[0].get("splits", [])
 qualified = []
-for entry in leaders.get("stats", [{}])[0].get("splits", []):
+for entry in splits:
     ab = entry.get("stat", {}).get("atBats", 0)
     player = entry.get("player", {})
     if ab >= MIN_AT_BATS:
@@ -32,31 +35,31 @@ for entry in leaders.get("stats", [{}])[0].get("splits", []):
             "ab": ab
         })
 
-print(f"Found {len(qualified)} players with {MIN_AT_BATS}+ at bats\n")
+print(f"Found {len(qualified)} players with {MIN_AT_BATS}+ AB\n")
 
+# ── Step 2: Fetch game logs via direct API call ────────────────────────
 for i, player in enumerate(qualified):
     pid = player["id"]
     name = player["name"]
     print(f"[{i+1}/{len(qualified)}] {name} ({player['ab']} AB)...")
 
     try:
-        stats = statsapi.player_stat_data(
-            pid, group="hitting", type="gameLog"
-        )
+        url = f"https://statsapi.mlb.com/api/v1/people/{pid}/stats?stats=gameLog&group=hitting&season={SEASON}"
+        with urllib.request.urlopen(url) as response:
+            raw = json.loads(response.read().decode())
 
-        # Get position from player lookup
-        player_info = statsapi.get("person", {"personId": pid})
-        position = player_info.get("people", [{}])[0].get("primaryPosition", {}).get("abbreviation", "")
-
+        game_splits = raw.get("stats", [{}])[0].get("splits", [])
         inserted = 0
-        for game in stats.get("stats", []):
-            s = game["stats"]
+
+        for game in game_splits:
+            s = game.get("stat", {})
             gdate = game.get("date")
+            team = game.get("team", {}).get("name", "")
+            positions = game.get("positionsPlayed", [{}])
+            position = positions[0].get("abbreviation", "") if positions else ""
+
             if not gdate:
                 continue
-
-            # Team is in the sport/league/team block of each game split
-            team = game.get("team", {}).get("name", "")
 
             cur.execute("""
                 INSERT INTO player_gamelogs
