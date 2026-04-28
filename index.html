@@ -375,13 +375,12 @@
     }
 
     // Fetch pitchers from Supabase
-    async function fetchPitchersFromDB(url, key, team) {
+    async function fetchPitchersFromDB(url, key) {
       const PAGE = 1000;
       let offset = 0, all = [], page;
-      const teamClause = team && team !== 'ALL' ? `&team=eq.${encodeURIComponent(team)}` : '';
       do {
         page = await sbFetch(url, key,
-          `pitcher_gamelogs?order=game_date.desc${teamClause}&limit=${PAGE}&offset=${offset}&select=*`);
+          `pitcher_gamelogs?order=game_date.desc&is_starter=eq.true&season=eq.${SEASON}&limit=${PAGE}&offset=${offset}&select=*`);
         all = all.concat(page);
         offset += PAGE;
       } while (page.length === PAGE);
@@ -399,9 +398,17 @@
           const vals = recent.map(g => parseFloat(g[key])).filter(v => !isNaN(v));
           return vals.length ? (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(2) : '—';
         };
+        // Calculate K/9 from strikeouts and innings_pitched
+        const k9Vals = recent.map(g => {
+          const ip = parseFloat(g.innings_pitched);
+          const k = parseFloat(g.strikeouts);
+          return (ip > 0 && !isNaN(k)) ? (k / ip) * 9 : NaN;
+        }).filter(v => !isNaN(v));
+        const k9 = k9Vals.length ? (k9Vals.reduce((a, b) => a + b, 0) / k9Vals.length).toFixed(2) : '—';
+        
         const fftMetric = recent.some(g => g.game_score != null) ? 'game_score' : 'era';
         const { predictionScore, dominantCycleDays, forecast } = buildPitcherForecast(recent, fftMetric);
-        return { name, gamelogs: recent, era: avg('era'), whip: avg('whip'), k9: avg('k_per_9'), fftMetric, predictionScore, dominantCycleDays, forecast };
+        return { name, gamelogs: recent, era: avg('era'), whip: avg('whip'), k9, fftMetric, predictionScore, dominantCycleDays, forecast };
       });
     }
 
@@ -511,7 +518,7 @@
       useEffect(() => {
         setLoading(true); setError(""); setPitchers([]); setSelected(null);
         if (dataSource === "live" && sbUrl && sbKey) {
-          fetchPitchersFromDB(sbUrl, sbKey, teamFilter)
+          fetchPitchersFromDB(sbUrl, sbKey)
             .then(data => {
               const sorted = data.sort((a,b) => b.predictionScore - a.predictionScore);
               setPitchers(sorted);
@@ -536,13 +543,16 @@
             setLoading(false);
           }, 300);
         }
-      }, [dataSource, sbUrl, sbKey, teamFilter]);
+      }, [dataSource, sbUrl, sbKey]);
 
       const handleInsight = async (pitcher) => {
         setInsightLoading(prev => ({...prev, [pitcher.name]: true}));
-        const summary = pitcher.gamelogs.slice(-10).map(g =>
-          `${g.game_date}: ERA ${g.era ?? '?'}, WHIP ${g.whip ?? '?'}, K/9 ${g.k_per_9 ?? '?'}, IP ${g.innings_pitched ?? '?'}`
-        ).join('\n');
+        const summary = pitcher.gamelogs.slice(-10).map(g => {
+          const ip = parseFloat(g.innings_pitched);
+          const ks = parseFloat(g.strikeouts);
+          const k9 = g.k_per_9 != null ? parseFloat(g.k_per_9).toFixed(1) : (ip > 0 && !isNaN(ks) ? ((ks / ip) * 9).toFixed(1) : '?');
+          return `${g.game_date}: ERA ${g.era ?? '?'}, WHIP ${g.whip ?? '?'}, K/9 ${k9}, IP ${g.innings_pitched ?? '?'}`;
+        }).join('\n');
         try {
           const res = await fetch('/api/scout', {
             method: 'POST',
@@ -683,11 +693,16 @@
 
               {/* K/9 trend */}
               {pitcherView === "k9" && (() => {
-                const chartData = selected.gamelogs.map(g => ({
-                  date: g.game_date.slice(5),
-                  k9:   parseFloat(g.k_per_9) || null,
-                  ip:   parseFloat(g.innings_pitched) || null,
-                }));
+                const chartData = selected.gamelogs.map(g => {
+                  const ip = parseFloat(g.innings_pitched);
+                  const ks = parseFloat(g.strikeouts);
+                  const k9raw = g.k_per_9 != null ? parseFloat(g.k_per_9) : (ip > 0 && !isNaN(ks) ? (ks / ip) * 9 : null);
+                  return {
+                    date: g.game_date.slice(5),
+                    k9:   k9raw != null ? +k9raw.toFixed(1) : null,
+                    ip:   ip > 0 ? ip : null,
+                  };
+                });
                 return (
                   <div style={{...s.card,padding:"20px 12px 12px"}}>
                     <div style={{fontSize:12,color:"#64748b",marginBottom:12}}>K/9 & Innings Pitched per start</div>
@@ -794,7 +809,7 @@
                               <td style={{padding:"5px 8px",textAlign:"center"}}>{g.innings_pitched ?? '—'}</td>
                               <td style={{padding:"5px 8px",textAlign:"center",color: parseFloat(g.era)<3.50?"#22c55e":parseFloat(g.era)>5?"#ef4444":"#f1f5f9",fontWeight:700}}>{g.era ?? '—'}</td>
                               <td style={{padding:"5px 8px",textAlign:"center",color: parseFloat(g.whip)<1.10?"#22c55e":parseFloat(g.whip)>1.50?"#ef4444":"#f1f5f9"}}>{g.whip ?? '—'}</td>
-                              <td style={{padding:"5px 8px",textAlign:"center",color: parseFloat(g.k_per_9)>=10?"#a78bfa":"#f1f5f9",fontWeight:parseFloat(g.k_per_9)>=10?700:400}}>{g.k_per_9 ?? '—'}</td>
+                              {(() => { const ip2=parseFloat(g.innings_pitched),ks2=parseFloat(g.strikeouts); const k9v=g.k_per_9!=null?parseFloat(g.k_per_9):(ip2>0&&!isNaN(ks2)?(ks2/ip2)*9:null); return <td style={{padding:"5px 8px",textAlign:"center",color:k9v>=10?"#a78bfa":"#f1f5f9",fontWeight:k9v>=10?700:400}}>{k9v!=null?k9v.toFixed(1):'—'}</td>; })()}
                               <td style={{padding:"5px 8px",textAlign:"center",fontWeight:700,color:isNaN(gs)?"#64748b":gsColor}}>{isNaN(gs)?'—':Math.round(gs)}</td>
                             </tr>
                           );
@@ -831,7 +846,11 @@
     function App(){
       const [sbUrl,setSbUrl]           = useState(()=>getCredential("sb-url","sbUrl"));
       const [sbKey,setSbKey]           = useState(()=>getCredential("sb-key","sbKey"));
-      const [dataSource,setDataSource] = useState("demo");
+      const [dataSource,setDataSource] = useState(() => {
+        const url = getCredential("sb-url","sbUrl");
+        const key = getCredential("sb-key","sbKey");
+        return (url && key) ? "live" : "demo";
+      });
       const [mainTab,setMainTab]       = useState("hitters");  // "hitters" | "pitchers"
       const [roster,setRoster]         = useState([]);
       const [rosterLoading,setRosterLoading] = useState(false);
