@@ -37,7 +37,7 @@ for entry in splits:
             "name": player.get("fullName")
         })
 print(f"Fetching {yesterday_str} stats for {len(qualified)} pitchers...")
-
+print(f"Qualified pitchers found: {len(qualified)}")
 # ── Fetch game logs via direct API call ───────────────────────────────
 for player in qualified:
     pid  = player["id"]
