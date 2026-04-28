@@ -9,9 +9,6 @@
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
   <script src="https://unpkg.com/recharts@2.10.0/umd/Recharts.js"></script>
-  <!-- Vercel injects these at build time via vercel.json rewrites or _headers.
-       Values come from NEXT_PUBLIC_SB_URL and NEXT_PUBLIC_SB_KEY env vars.
-       Falls back to empty string if not set (localStorage then takes over). -->
   <meta name="sb-url" content="%SB_URL%">
   <meta name="sb-key" content="%SB_KEY%">
   <meta name="default-team" content="%DEFAULT_TEAM%">
@@ -27,8 +24,9 @@
   <div id="root"></div>
   <script type="text/babel">
     const { useState, useEffect, useCallback, useRef } = React;
-    const { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid,
-            Tooltip, ResponsiveContainer, ReferenceLine, Cell } = Recharts;
+    const { AreaChart, Area, BarChart, Bar, LineChart, Line, ComposedChart,
+            XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+            ReferenceLine, Cell, Legend } = Recharts;
 
     const SEASON = 2026;
     const MIN_AT_BATS = 20;
@@ -41,8 +39,6 @@
     ];
     const getPhase = d => PHASE_CONFIG.find(p => d >= p.start && d <= p.end);
 
-    // Real upcoming schedule Apr 27-May 1 2026 (from live MLB API)
-    // matchupFactor: hitter-friendliness vs upcoming opponents, 1.0=neutral
     const UPCOMING_SCHEDULE = {
       "New York Yankees":       { opponents:["TEX","TEX","TEX"], matchupFactor:1.15 },
       "Los Angeles Dodgers":    { opponents:["MIA","MIA","MIA"], matchupFactor:1.20 },
@@ -67,13 +63,11 @@
       "default":                { opponents:[],                  matchupFactor:1.00 },
     };
 
-    // Prediction scoring engine — returns score 0-99 + breakdown
     function computePredictionScore(playerName, teamName, gameData, seasonStats) {
       if (!gameData || gameData.length < 3) return { score:50, label:"Insufficient data", tier:"neutral", breakdown:{phaseScore:0,trendScore:0,opsScore:0,momentumScore:0,matchupScore:0}, opponents:[] };
 
-      // 1. Cycle phase score using FFT analysis when available, else fixed 28-day (0-30)
       let phaseScore = 15;
-      let phaseLabel = "current cycle"; // used in label below — set in each branch
+      let phaseLabel = "current cycle";
       const analysis = analyzePlayerCycles(gameData);
       if (analysis && analysis.forecastValues.length > 0) {
         const f = analysis.forecastValues;
@@ -97,22 +91,18 @@
         phaseLabel = np.name + " phase";
       }
 
-      // 2. Last-5 batting avg trend (0-25)
       const last5     = gameData.slice(-5);
       const last5Avg  = last5.reduce((s,g) => s + g.avg, 0) / last5.length;
       const trendScore = Math.min(25, Math.round(last5Avg * 75));
 
-      // 3. Season OPS quality (0-20)
       const ops      = seasonStats ? parseFloat(seasonStats.ops) : 0;
       const opsScore = ops >= 0.900 ? 20 : ops >= 0.800 ? 16 : ops >= 0.700 ? 11 : ops >= 0.600 ? 6 : 3;
 
-      // 4. 10-game momentum direction (0-15)
       const last10     = gameData.slice(-10);
       const firstHalf  = last10.slice(0,5).reduce((s,g) => s + g.avg, 0) / 5;
       const secondHalf = last10.slice(5).reduce((s,g) => s + g.avg, 0) / Math.max(last10.slice(5).length, 1);
       const momentumScore = secondHalf > firstHalf ? Math.min(15, Math.round((secondHalf - firstHalf) * 100)) : 0;
 
-      // 5. Matchup quality (0-10)
       const sched       = UPCOMING_SCHEDULE[teamName] || UPCOMING_SCHEDULE["default"];
       const matchupScore = Math.max(0, Math.min(10, Math.round((sched.matchupFactor - 0.85) / 0.45 * 10)));
 
@@ -129,12 +119,7 @@
 
     const TIER_COLOR = { hot:"#22c55e", warm:"#f59e0b", neutral:"#64748b", cold:"#ef4444" };
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // TIME-SERIES CYCLE ANALYSIS ENGINE
-    // ═══════════════════════════════════════════════════════════════════════════
-    //
-    // Full DFT (O(n²)) — sufficient for game-log lengths (≤162 games).
-    // Returns complex spectrum so we can rank by amplitude and reconstruct.
+    // ── DFT cycle analysis (hitters) ─────────────────────────────────────────
     function dft(signal) {
       const N = signal.length;
       const re = new Float64Array(N), im = new Float64Array(N);
@@ -149,8 +134,6 @@
       return { re, im };
     }
 
-    // Reconstruct signal at arbitrary positions using a subset of frequency components.
-    // components: [{ k, re, im }]  positions: array of x values (can extend beyond N for forecast)
     function reconstructAt(components, N, positions) {
       return positions.map(x => {
         let v = 0;
@@ -162,94 +145,55 @@
       });
     }
 
-    // Main analysis function — call once per player when gameData changes.
-    // Returns:
-    //   dominantCycles  : [{ periodDays, amplitude, pctVariance }] top cycles, sorted by amplitude
-    //   reconstructed   : Float64Array, same length as signal, best-fit reconstruction
-    //   forecast        : array of { x, avg } for FORECAST_DAYS ahead
-    //   components      : the kept frequency components
-    //   meanAvg         : mean batting average (DC offset)
-    //   r2              : R² of reconstruction vs actual signal
     const FORECAST_DAYS = 14;
-    const MAX_COMPONENTS = 5;     // keep top-N frequencies by amplitude
-    const MIN_PERIOD = 4;         // ignore cycles shorter than 4 games (noise)
-    const MIN_AMPLITUDE = 0.005;  // ignore tiny fluctuations (<0.5 pts avg)
+    const MAX_COMPONENTS = 5;
+    const MIN_PERIOD = 4;
+    const MIN_AMPLITUDE = 0.005;
 
     function analyzePlayerCycles(gameData) {
       const N = gameData.length;
       if (N < 10) return null;
-
-      // Build mean-subtracted batting average signal
       const raw = gameData.map(g => g.avg);
       const mean = raw.reduce((a,b)=>a+b,0) / N;
       const signal = raw.map(v => v - mean);
-
       const { re, im } = dft(signal);
-
-      // Build amplitude spectrum for k=1..floor(N/2) (positive frequencies only)
       const spectrum = [];
       for (let k = 1; k <= Math.floor(N / 2); k++) {
-        const amp = 2 * Math.sqrt(re[k]*re[k] + im[k]*im[k]); // ×2 for one-sided
+        const amp = 2 * Math.sqrt(re[k]*re[k] + im[k]*im[k]);
         const periodDays = N / k;
         if (periodDays < MIN_PERIOD) continue;
         spectrum.push({ k, amp, periodDays, re: re[k], im: im[k] });
       }
       spectrum.sort((a,b) => b.amp - a.amp);
-
-      // Total power (for variance explained)
       const totalPower = spectrum.reduce((s,c) => s + c.amp*c.amp, 0) || 1;
-
-      // Keep top components above amplitude threshold
-      const kept = spectrum
-        .filter(c => c.amp >= MIN_AMPLITUDE)
-        .slice(0, MAX_COMPONENTS);
-
+      const kept = spectrum.filter(c => c.amp >= MIN_AMPLITUDE).slice(0, MAX_COMPONENTS);
       if (kept.length === 0) return null;
-
-      // Build components array including DC (k=0)
       const components = [{ k:0, re: mean, im: 0 }, ...kept];
-
-      // Reconstruct over historical range
       const positions = Array.from({ length: N }, (_,i) => i);
       const reconstructed = reconstructAt(components, N, positions);
-
-      // R² vs actual
       const ssTot = raw.reduce((s,v) => s + (v-mean)**2, 0);
       const ssRes = raw.reduce((s,v,i) => s + (v-reconstructed[i])**2, 0);
       const r2 = ssTot > 0 ? Math.max(0, 1 - ssRes/ssTot) : 0;
-
-      // Forecast: extend reconstruction FORECAST_DAYS beyond last game
       const forecastPositions = Array.from({ length: FORECAST_DAYS }, (_,i) => N + i);
       const forecastValues = reconstructAt(components, N, forecastPositions);
-
       const dominantCycles = kept.map(c => ({
         periodDays: +c.periodDays.toFixed(1),
         amplitude:  +c.amp.toFixed(4),
         pctVariance: +(100 * c.amp*c.amp / totalPower).toFixed(1),
       }));
-
       return { dominantCycles, reconstructed, forecastValues, components, N, mean, r2 };
     }
 
-    // Build chart-ready data arrays from analysis result
     function buildCycleChartData(gameData, analysis) {
       if (!analysis) return [];
       const { reconstructed, forecastValues } = analysis;
-
-      // Historical points: actual avg + FFT reconstruction, forecast=null
       const historical = gameData.map((g,i) => ({
         date:     g.date,
         actual:   +g.avg.toFixed(3),
         fitted:   +Math.max(0.050, reconstructed[i]).toFixed(3),
         forecast: null,
       }));
-
-      // Connect: last historical point also seeds forecast so line is continuous
       const lastFitted = historical.length ? historical[historical.length-1].fitted : 0;
-
-      // Forecast points: actual=null, fitted=null, forecast=value
-      // First forecast point duplicates the last fitted value so the amber line
-      // starts exactly where the green line ends — no visual gap.
       const forecastPoints = forecastValues.map((v,i) => ({
         date:     `+${i+1}d`,
         actual:   null,
@@ -257,7 +201,6 @@
         forecast: +Math.max(0.050, v).toFixed(3),
         isForecast: true,
       }));
-      // Seed the join: insert a bridge point at index 0 with both fitted and forecast set
       if (forecastPoints.length && historical.length) {
         forecastPoints.unshift({
           date:     historical[historical.length-1].date,
@@ -267,20 +210,60 @@
           isForecast: false,
         });
       }
-
       return [...historical, ...forecastPoints];
     }
 
-    // Map a position within the player's dominant cycle to a phase color
-    function cyclePhaseColor(posInCycle, cyclePeriod) {
-      const pct = (posInCycle % cyclePeriod) / cyclePeriod;
-      if (pct < 0.25)  return "#22c55e"; // Peak
-      if (pct < 0.50)  return "#3b82f6"; // Rising
-      if (pct < 0.75)  return "#f59e0b"; // Declining
-      return "#ef4444";                   // Trough
+    // ── Pitcher FFT helpers ───────────────────────────────────────────────────
+    function fftPitcher(values) {
+      const N = values.length;
+      if (N < 4) return { dominantCycleDays: null, amplitude: 0, predictionScore: 0 };
+      const mean = values.reduce((a, b) => a + b, 0) / N;
+      const signal = values.map(v => v - mean);
+      // Simple DFT (reuse same approach as hitter engine)
+      const re = new Float64Array(N), im = new Float64Array(N);
+      for (let k = 0; k < N; k++) {
+        for (let n = 0; n < N; n++) {
+          const angle = (2 * Math.PI * k * n) / N;
+          re[k] += signal[n] * Math.cos(angle);
+          im[k] -= signal[n] * Math.sin(angle);
+        }
+        re[k] /= N; im[k] /= N;
+      }
+      let bestIdx = 1, bestMag = 0;
+      for (let i = 1; i <= Math.floor(N / 2); i++) {
+        const mag = 2 * Math.sqrt(re[i]*re[i] + im[i]*im[i]);
+        if (mag > bestMag) { bestMag = mag; bestIdx = i; }
+      }
+      const cycleDays = Math.round(N / bestIdx);
+      const amplitude = bestMag;
+      const variance = signal.reduce((a, b) => a + b * b, 0) / N;
+      const score = variance > 0 ? Math.min(99, Math.round((amplitude / Math.sqrt(variance)) * 33)) : 0;
+      return { dominantCycleDays: cycleDays, amplitude, predictionScore: score };
     }
 
+    function buildPitcherForecast(gamelogs, metric) {
+      const vals = gamelogs.map(g => parseFloat(g[metric]) || 0);
+      const { dominantCycleDays, predictionScore } = fftPitcher(vals);
+      if (!dominantCycleDays) return { forecast: [], predictionScore: 0, dominantCycleDays: null };
+      const last = vals.slice(-dominantCycleDays);
+      const lastDate = new Date(gamelogs[gamelogs.length - 1].game_date + "T12:00:00");
+      const forecast = Array.from({ length: 14 }, (_, i) => {
+        const d = new Date(lastDate);
+        d.setDate(d.getDate() + i + 1);
+        const idx = i % dominantCycleDays;
+        return {
+          date: d.toISOString().slice(0, 10),
+          value: +(last[idx % last.length] || 0).toFixed(3),
+        };
+      });
+      return { forecast, predictionScore, dominantCycleDays };
+    }
 
+    function scoreColor(score) {
+      if (score >= 75) return '#22c55e';
+      if (score >= 50) return '#f59e0b';
+      return '#ef4444';
+    }
 
     // MLB player ID lookup
     const MLB_IDS = {
@@ -314,6 +297,30 @@
       };
     });
 
+    // Demo pitcher data generator
+    const genDemoPitcher = (name, seed) => {
+      const starts = Array.from({length: 20}, (_, i) => {
+        const d = new Date(); d.setDate(d.getDate() - (19 - i) * 5);
+        const era  = Math.max(1.0, Math.min(8.0, 3.80 + 1.2*Math.sin((2*Math.PI*i)/6 + seed) + (rng(seed*i+1)-0.5)*0.8));
+        const whip = Math.max(0.8, Math.min(2.0, 1.20 + 0.3*Math.sin((2*Math.PI*i)/6 + seed+1) + (rng(seed*i+2)-0.5)*0.3));
+        const k9   = Math.max(4.0, Math.min(14.0, 9.0 + 2.0*Math.sin((2*Math.PI*i)/8 + seed+2) + (rng(seed*i+3)-0.5)*1.5));
+        const gs   = Math.max(20, Math.min(85, 58 + 18*Math.sin((2*Math.PI*i)/6 + seed) + (rng(seed*i+4)-0.5)*12));
+        const ip   = Math.max(3.0, Math.min(9.0, 5.5 + 1.5*Math.sin((2*Math.PI*i)/7 + seed) + (rng(seed*i+5)-0.5)*1.0));
+        return {
+          game_date: d.toISOString().slice(0,10),
+          era: +era.toFixed(2), whip: +whip.toFixed(2),
+          k_per_9: +k9.toFixed(1), game_score: Math.round(gs),
+          innings_pitched: +ip.toFixed(1),
+        };
+      });
+      return starts;
+    };
+
+    const DEMO_PITCHERS = [
+      "Gerrit Cole","Clayton Kershaw","Max Scherzer","Justin Verlander",
+      "Jacob deGrom","Shane Bieber","Corbin Burnes","Sandy Alcantara",
+    ].map((name, i) => ({ name, gamelogs: genDemoPitcher(name, i * 1.7 + 1) }));
+
     const phaseAvg = (games,ph,stat) => {
       const f = games.filter(g=>g.phase===ph);
       return f.length ? (f.reduce((s,g)=>s+g[stat],0)/f.length).toFixed(3) : "—";
@@ -339,9 +346,6 @@
       return r.json();
     }
     async function fetchRoster(url,key){
-      // Paginate in chunks of 1000 until we get fewer rows than requested,
-      // then deduplicate client-side. This handles databases of any size without
-      // relying on a fixed limit that silently truncates results.
       const PAGE = 1000;
       let offset = 0, all = [], page;
       do {
@@ -367,6 +371,37 @@
           avg:+avg.toFixed(3), ops:+(parseFloat(row.ops)||avg*1.7).toFixed(3),
           hits:row.hits||0, hr:row.home_runs||0, ab:row.at_bats||0, rbi:row.rbi||0,
         };
+      });
+    }
+
+    // Fetch pitchers from Supabase
+    async function fetchPitchersFromDB(url, key, team) {
+      const PAGE = 1000;
+      let offset = 0, all = [], page;
+      const teamClause = team && team !== 'ALL' ? `&team=eq.${encodeURIComponent(team)}` : '';
+      do {
+        page = await sbFetch(url, key,
+          `pitcher_gamelogs?order=game_date.desc${teamClause}&limit=${PAGE}&offset=${offset}&select=*`);
+        all = all.concat(page);
+        offset += PAGE;
+      } while (page.length === PAGE);
+
+      const byPlayer = {};
+      for (const row of all) {
+        if (!byPlayer[row.player_name]) byPlayer[row.player_name] = [];
+        byPlayer[row.player_name].push(row);
+      }
+
+      return Object.entries(byPlayer).map(([name, logs]) => {
+        const sorted = [...logs].sort((a, b) => a.game_date.localeCompare(b.game_date));
+        const recent = sorted.slice(-30);
+        const avg = (key) => {
+          const vals = recent.map(g => parseFloat(g[key])).filter(v => !isNaN(v));
+          return vals.length ? (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(2) : '—';
+        };
+        const fftMetric = recent.some(g => g.game_score != null) ? 'game_score' : 'era';
+        const { predictionScore, dominantCycleDays, forecast } = buildPitcherForecast(recent, fftMetric);
+        return { name, gamelogs: recent, era: avg('era'), whip: avg('whip'), k9: avg('k_per_9'), fftMetric, predictionScore, dominantCycleDays, forecast };
       });
     }
 
@@ -418,7 +453,6 @@
       );
     };
 
-    // Prediction breakdown card
     const PredictionPanel = ({pred}) => {
       if(!pred) return null;
       const color = TIER_COLOR[pred.tier];
@@ -454,10 +488,6 @@
       );
     };
 
-    // ── Credential resolution: env vars (build-time) → localStorage (runtime) ──
-    // Vercel replaces %SB_URL% / %SB_KEY% / %DEFAULT_TEAM% in the HTML at build time.
-    // If the placeholder wasn't replaced (local dev or missing env var) the
-    // value starts with "%" and we fall back to localStorage.
     function readMeta(name) {
       const el = document.querySelector(`meta[name="${name}"]`);
       const val = el ? el.getAttribute("content") : "";
@@ -467,11 +497,342 @@
       return localStorage.getItem(lsKey) || readMeta(metaName) || "";
     }
 
+    // ── Pitchers Tab Component ────────────────────────────────────────────────
+    function PitchersTab({ dataSource, sbUrl, sbKey, teamFilter }) {
+      const [pitchers, setPitchers]         = useState([]);
+      const [loading, setLoading]           = useState(true);
+      const [error, setError]               = useState("");
+      const [selected, setSelected]         = useState(null);
+      const [sortBy, setSortBy]             = useState("predictionScore");
+      const [pitcherView, setPitcherView]   = useState("trends");
+      const [insight, setInsight]           = useState({});
+      const [insightLoading, setInsightLoading] = useState({});
+
+      useEffect(() => {
+        setLoading(true); setError(""); setPitchers([]); setSelected(null);
+        if (dataSource === "live" && sbUrl && sbKey) {
+          fetchPitchersFromDB(sbUrl, sbKey, teamFilter)
+            .then(data => {
+              const sorted = data.sort((a,b) => b.predictionScore - a.predictionScore);
+              setPitchers(sorted);
+              setSelected(sorted[0] || null);
+            })
+            .catch(e => setError(e.message))
+            .finally(() => setLoading(false));
+        } else {
+          // Demo / MLB API mode — use generated demo pitchers
+          setTimeout(() => {
+            const enriched = DEMO_PITCHERS.map(p => {
+              const fftMetric = 'game_score';
+              const { predictionScore, dominantCycleDays, forecast } = buildPitcherForecast(p.gamelogs, fftMetric);
+              const avg = (key) => {
+                const vals = p.gamelogs.map(g => parseFloat(g[key])).filter(v => !isNaN(v));
+                return vals.length ? (vals.reduce((a,b) => a+b, 0) / vals.length).toFixed(2) : '—';
+              };
+              return { ...p, era: avg('era'), whip: avg('whip'), k9: avg('k_per_9'), fftMetric, predictionScore, dominantCycleDays, forecast };
+            }).sort((a,b) => b.predictionScore - a.predictionScore);
+            setPitchers(enriched);
+            setSelected(enriched[0] || null);
+            setLoading(false);
+          }, 300);
+        }
+      }, [dataSource, sbUrl, sbKey, teamFilter]);
+
+      const handleInsight = async (pitcher) => {
+        setInsightLoading(prev => ({...prev, [pitcher.name]: true}));
+        const summary = pitcher.gamelogs.slice(-10).map(g =>
+          `${g.game_date}: ERA ${g.era ?? '?'}, WHIP ${g.whip ?? '?'}, K/9 ${g.k_per_9 ?? '?'}, IP ${g.innings_pitched ?? '?'}`
+        ).join('\n');
+        try {
+          const res = await fetch('/api/scout', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              prompt: `You are a baseball analytics AI. Analyze ${pitcher.name}'s recent pitching performance:\n${summary}\n\nIn 3-4 sentences: describe the trend in ERA/WHIP/K9, identify any cycle or pattern (cycle length: ${pitcher.dominantCycleDays ?? 'unknown'} starts, prediction score: ${pitcher.predictionScore}/99), and give a concrete fantasy/lineup recommendation for the next 2-3 starts.`
+            })
+          });
+          if (!res.ok) throw new Error(`API ${res.status}`);
+          const d = await res.json();
+          setInsight(prev => ({...prev, [pitcher.name]: d.text || d.insight || 'No insight returned.'}));
+        } catch(e) {
+          setInsight(prev => ({...prev, [pitcher.name]: 'Error: ' + e.message}));
+        }
+        setInsightLoading(prev => ({...prev, [pitcher.name]: false}));
+      };
+
+      const s = {
+        card: {background:"#1e293b",borderRadius:12,padding:16},
+        btn: (active, color="#3b82f6") => ({padding:"7px 14px",borderRadius:8,border:"none",cursor:"pointer",fontWeight:700,fontSize:12,background:active?color:"#334155",color:active?"#fff":"#94a3b8"}),
+      };
+
+      const sorted = [...pitchers].sort((a, b) => {
+        if (sortBy === 'predictionScore') return b.predictionScore - a.predictionScore;
+        if (sortBy === 'era')  return parseFloat(a.era)  - parseFloat(b.era);
+        if (sortBy === 'whip') return parseFloat(a.whip) - parseFloat(b.whip);
+        if (sortBy === 'k9')   return parseFloat(b.k9)   - parseFloat(a.k9);
+        return 0;
+      });
+
+      if (loading) return <div style={{...s.card,textAlign:"center",padding:60,color:"#64748b"}}>Loading pitcher data…</div>;
+      if (error)   return <div style={{...s.card,padding:20,color:"#fca5a5"}}>⚠️ {error}</div>;
+      if (!pitchers.length) return <div style={{...s.card,textAlign:"center",padding:60,color:"#64748b"}}>No pitcher data found.</div>;
+
+      return (
+        <div style={{display:"grid",gridTemplateColumns:"260px 1fr",gap:16,alignItems:"start"}}>
+
+          {/* Pitcher sidebar */}
+          <div style={{...s.card,padding:12}}>
+            <div style={{fontSize:12,fontWeight:700,color:"#94a3b8",marginBottom:10}}>PITCHERS</div>
+            <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}>
+              {[["predictionScore","🔮 Score"],["era","ERA"],["whip","WHIP"],["k9","K/9"]].map(([v,label])=>(
+                <button key={v} onClick={()=>setSortBy(v)}
+                  style={{...s.btn(sortBy===v,"#a855f7"),flex:1,padding:"4px 6px",fontSize:10,minWidth:0}}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div style={{maxHeight:520,overflowY:"auto",fontSize:12}}>
+              {sorted.map((p, rank) => {
+                const isSel = selected?.name === p.name;
+                const color = scoreColor(p.predictionScore);
+                return (
+                  <div key={p.name} onClick={() => { setSelected(p); setPitcherView("trends"); }}
+                    style={{padding:"8px 10px",borderRadius:6,cursor:"pointer",marginBottom:3,
+                      background:isSel?"#7c3aed":"transparent"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
+                      <span style={{color:isSel?"#fff":"#cbd5e1",fontWeight:isSel?700:400,fontSize:12}}>
+                        <span style={{color:isSel?"rgba(255,255,255,0.5)":"#475569",marginRight:5,fontSize:10}}>#{rank+1}</span>
+                        {p.name}
+                      </span>
+                      <span style={{fontSize:11,fontWeight:700,color:isSel?"#fff":color}}>{p.predictionScore}</span>
+                    </div>
+                    {!isSel && (
+                      <div style={{display:"flex",gap:8,fontSize:10,color:"#64748b"}}>
+                        <span>ERA <b style={{color:"#94a3b8"}}>{p.era}</b></span>
+                        <span>WHIP <b style={{color:"#94a3b8"}}>{p.whip}</b></span>
+                        <span>K/9 <b style={{color:"#94a3b8"}}>{p.k9}</b></span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Pitcher detail */}
+          {selected && (
+            <div>
+              {/* Header */}
+              <div style={{...s.card,marginBottom:12,borderLeft:"4px solid #a855f7",display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:12}}>
+                <div style={{flex:1,minWidth:200}}>
+                  <div style={{fontSize:18,fontWeight:800}}>{selected.name}</div>
+                  <div style={{fontSize:12,color:"#64748b",marginTop:2}}>
+                    {selected.dominantCycleDays ? `Dominant cycle: ${selected.dominantCycleDays} starts` : "Cycle: analyzing…"}
+                    {" · "}FFT Score {selected.predictionScore}/99
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:10,marginTop:8}}>
+                    <div style={{flex:1,maxWidth:200,height:8,background:"#0f172a",borderRadius:8,overflow:"hidden"}}>
+                      <div style={{width:`${selected.predictionScore}%`,height:"100%",background:scoreColor(selected.predictionScore),borderRadius:8,transition:"width 0.4s"}}/>
+                    </div>
+                    <span style={{fontSize:13,fontWeight:700,color:scoreColor(selected.predictionScore)}}>{selected.predictionScore}</span>
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                  {[["ERA",selected.era],["WHIP",selected.whip],["K/9",selected.k9]].map(([l,v])=>(
+                    <div key={l} style={{background:"#0f172a",borderRadius:8,padding:"6px 12px",textAlign:"center",minWidth:52}}>
+                      <div style={{fontSize:10,color:"#64748b"}}>{l}</div>
+                      <div style={{fontSize:16,fontWeight:800}}>{v}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* View tabs */}
+              <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
+                {[["trends","📈 ERA/WHIP"],["k9","🔥 K/9"],["forecast","🔮 Forecast"],["log","📋 Game Log"]].map(([v,label])=>(
+                  <button key={v} onClick={()=>setPitcherView(v)} style={s.btn(pitcherView===v,"#7c3aed")}>{label}</button>
+                ))}
+              </div>
+
+              {/* ERA / WHIP trend */}
+              {pitcherView === "trends" && (() => {
+                const chartData = selected.gamelogs.map(g => ({
+                  date: g.game_date.slice(5),
+                  era:  parseFloat(g.era)  || null,
+                  whip: parseFloat(g.whip) || null,
+                }));
+                return (
+                  <div style={{...s.card,padding:"20px 12px 12px"}}>
+                    <div style={{fontSize:12,color:"#64748b",marginBottom:12}}>ERA & WHIP per start (last {selected.gamelogs.length} starts)</div>
+                    <ResponsiveContainer width="100%" height={220}>
+                      <ComposedChart data={chartData} margin={{left:-10,right:10}}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#334155"/>
+                        <XAxis dataKey="date" tick={{fontSize:9,fill:"#64748b"}} interval={Math.max(1,Math.floor(chartData.length/7))}/>
+                        <YAxis yAxisId="era"  domain={['auto','auto']} tick={{fontSize:10,fill:"#64748b"}} label={{value:"ERA",angle:-90,position:"insideLeft",fontSize:10,fill:"#64748b"}}/>
+                        <YAxis yAxisId="whip" orientation="right" domain={['auto','auto']} tick={{fontSize:10,fill:"#64748b"}} label={{value:"WHIP",angle:90,position:"insideRight",fontSize:10,fill:"#64748b"}}/>
+                        <Tooltip formatter={(v,n)=>[v?.toFixed(2),n.toUpperCase()]}
+                          contentStyle={{background:"#1e293b",border:"1px solid #334155",borderRadius:8,fontSize:12}}/>
+                        <Legend wrapperStyle={{fontSize:11}}/>
+                        <Line yAxisId="era"  type="monotone" dataKey="era"  stroke="#f87171" strokeWidth={2} dot={{r:3,fill:"#f87171"}} name="ERA"/>
+                        <Line yAxisId="whip" type="monotone" dataKey="whip" stroke="#60a5fa" strokeWidth={2} dot={{r:3,fill:"#60a5fa"}} name="WHIP"/>
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+                );
+              })()}
+
+              {/* K/9 trend */}
+              {pitcherView === "k9" && (() => {
+                const chartData = selected.gamelogs.map(g => ({
+                  date: g.game_date.slice(5),
+                  k9:   parseFloat(g.k_per_9) || null,
+                  ip:   parseFloat(g.innings_pitched) || null,
+                }));
+                return (
+                  <div style={{...s.card,padding:"20px 12px 12px"}}>
+                    <div style={{fontSize:12,color:"#64748b",marginBottom:12}}>K/9 & Innings Pitched per start</div>
+                    <ResponsiveContainer width="100%" height={220}>
+                      <ComposedChart data={chartData} margin={{left:-10,right:10}}>
+                        <defs>
+                          <linearGradient id="k9Grad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%"  stopColor="#a78bfa" stopOpacity={0.4}/>
+                            <stop offset="95%" stopColor="#a78bfa" stopOpacity={0}/>
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#334155"/>
+                        <XAxis dataKey="date" tick={{fontSize:9,fill:"#64748b"}} interval={Math.max(1,Math.floor(chartData.length/7))}/>
+                        <YAxis yAxisId="k9" domain={['auto','auto']} tick={{fontSize:10,fill:"#64748b"}}/>
+                        <YAxis yAxisId="ip" orientation="right" domain={[0,10]} tick={{fontSize:10,fill:"#64748b"}}/>
+                        <Tooltip formatter={(v,n)=>[v?.toFixed(1),n]}
+                          contentStyle={{background:"#1e293b",border:"1px solid #334155",borderRadius:8,fontSize:12}}/>
+                        <Legend wrapperStyle={{fontSize:11}}/>
+                        <Area yAxisId="k9" type="monotone" dataKey="k9" stroke="#a78bfa" strokeWidth={2} fill="url(#k9Grad)" name="K/9"/>
+                        <Bar  yAxisId="ip" dataKey="ip" fill="#334155" opacity={0.5} name="IP" radius={[2,2,0,0]}/>
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+                );
+              })()}
+
+              {/* FFT Forecast */}
+              {pitcherView === "forecast" && (() => {
+                const histData = selected.gamelogs.slice(-15).map(g => ({
+                  date:  g.game_date.slice(5),
+                  value: parseFloat(g[selected.fftMetric]) || null,
+                  type:  "actual",
+                }));
+                const fcData = selected.forecast.map(f => ({
+                  date:  f.date.slice(5),
+                  value: f.value,
+                  type:  "forecast",
+                }));
+                const combined = [
+                  ...histData,
+                  { date: histData[histData.length-1]?.date, value: histData[histData.length-1]?.value, type:"bridge" },
+                  ...fcData,
+                ];
+                return (
+                  <div style={{...s.card,padding:"20px 12px 12px"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                      <div style={{fontSize:12,color:"#64748b"}}>
+                        14-start FFT forecast · metric: <b style={{color:"#a78bfa"}}>{selected.fftMetric === 'game_score' ? 'Game Score' : 'ERA'}</b>
+                        {selected.dominantCycleDays && <span> · dominant cycle: <b style={{color:"#a78bfa"}}>{selected.dominantCycleDays} starts</b></span>}
+                      </div>
+                    </div>
+                    <ResponsiveContainer width="100%" height={220}>
+                      <ComposedChart margin={{left:-10,right:10}}>
+                        <defs>
+                          <linearGradient id="fcGrad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%"  stopColor="#34d399" stopOpacity={0.3}/>
+                            <stop offset="95%" stopColor="#34d399" stopOpacity={0}/>
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#334155"/>
+                        <XAxis dataKey="date" data={combined} tick={{fontSize:9,fill:"#64748b"}} interval={Math.max(1,Math.floor(combined.length/7))}/>
+                        <YAxis tick={{fontSize:10,fill:"#64748b"}}/>
+                        <Tooltip formatter={(v)=>[v?.toFixed(1)]} contentStyle={{background:"#1e293b",border:"1px solid #334155",borderRadius:8,fontSize:12}}/>
+                        <ReferenceLine x={histData[histData.length-1]?.date} stroke="#94a3b8" strokeDasharray="3 3"
+                          label={{value:"NOW",fontSize:9,fill:"#94a3b8",position:"insideTopRight"}}/>
+                        <Line data={histData} type="monotone" dataKey="value" stroke="#a78bfa" strokeWidth={2} dot={{r:3}} name="Actual" connectNulls/>
+                        <Area data={fcData}   type="monotone" dataKey="value" stroke="#34d399" strokeWidth={2} strokeDasharray="5 3" fill="url(#fcGrad)" name="Forecast" dot={false} connectNulls/>
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                    <div style={{display:"flex",gap:16,justifyContent:"center",marginTop:10}}>
+                      {[["#a78bfa","Actual"],["#34d399","14-start forecast (FFT cycle)"]].map(([c,l])=>(
+                        <div key={l} style={{display:"flex",alignItems:"center",gap:5,fontSize:11}}>
+                          <div style={{width:24,height:2,background:c}}/><span style={{color:"#94a3b8"}}>{l}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{marginTop:12,padding:"8px 10px",background:"#0f172a",borderRadius:6,fontSize:10,color:"#475569",lineHeight:1.5}}>
+                      FFT on {selected.gamelogs.length}-start {selected.fftMetric === 'game_score' ? 'game score' : 'ERA'} signal. Dominant cycle: {selected.dominantCycleDays ?? '?'} starts. Forecast extrapolates this cycle 14 starts forward.
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Game Log */}
+              {pitcherView === "log" && (
+                <div style={{...s.card,padding:"16px 12px"}}>
+                  <div style={{fontSize:12,color:"#64748b",marginBottom:12}}>Recent starts (newest first)</div>
+                  <div style={{overflowX:"auto"}}>
+                    <table style={{width:"100%",fontSize:11,borderCollapse:"collapse"}}>
+                      <thead>
+                        <tr style={{color:"#64748b"}}>
+                          {["Date","IP","ERA","WHIP","K/9","Game Score"].map(h=>(
+                            <td key={h} style={{padding:"4px 8px",borderBottom:"1px solid #334155",textAlign:h==="Date"?"left":"center"}}>{h}</td>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[...selected.gamelogs].reverse().map((g, i) => {
+                          const gs = parseFloat(g.game_score);
+                          const gsColor = gs >= 60 ? "#22c55e" : gs >= 45 ? "#f59e0b" : "#ef4444";
+                          return (
+                            <tr key={i} style={{borderBottom:"1px solid #1e293b"}}>
+                              <td style={{padding:"5px 8px",color:"#94a3b8"}}>{g.game_date}</td>
+                              <td style={{padding:"5px 8px",textAlign:"center"}}>{g.innings_pitched ?? '—'}</td>
+                              <td style={{padding:"5px 8px",textAlign:"center",color: parseFloat(g.era)<3.50?"#22c55e":parseFloat(g.era)>5?"#ef4444":"#f1f5f9",fontWeight:700}}>{g.era ?? '—'}</td>
+                              <td style={{padding:"5px 8px",textAlign:"center",color: parseFloat(g.whip)<1.10?"#22c55e":parseFloat(g.whip)>1.50?"#ef4444":"#f1f5f9"}}>{g.whip ?? '—'}</td>
+                              <td style={{padding:"5px 8px",textAlign:"center",color: parseFloat(g.k_per_9)>=10?"#a78bfa":"#f1f5f9",fontWeight:parseFloat(g.k_per_9)>=10?700:400}}>{g.k_per_9 ?? '—'}</td>
+                              <td style={{padding:"5px 8px",textAlign:"center",fontWeight:700,color:isNaN(gs)?"#64748b":gsColor}}>{isNaN(gs)?'—':Math.round(gs)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* AI Scout */}
+              <div style={{...s.card,marginTop:12}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                  <div style={{fontWeight:700,fontSize:13}}>🤖 AI Scouting Insight</div>
+                  <button onClick={()=>handleInsight(selected)} disabled={insightLoading[selected.name]}
+                    style={{padding:"7px 14px",borderRadius:8,border:"none",cursor:"pointer",fontWeight:700,fontSize:12,
+                      background:insightLoading[selected.name]?"#334155":"#7c3aed",
+                      color:"#fff",opacity:insightLoading[selected.name]?0.6:1}}>
+                    {insightLoading[selected.name] ? "Analyzing…" : `Analyze ${selected.name.split(" ").pop()}`}
+                  </button>
+                </div>
+                {insight[selected.name]
+                  ? <p style={{fontSize:13,color:"#cbd5e1",lineHeight:1.7,margin:0}}>{insight[selected.name]}</p>
+                  : <p style={{fontSize:13,color:"#475569",fontStyle:"italic",margin:0}}>Click Analyze for a Claude-powered pitching report incorporating cycle analysis.</p>
+                }
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     // ── App ───────────────────────────────────────────────────────────────────
     function App(){
       const [sbUrl,setSbUrl]           = useState(()=>getCredential("sb-url","sbUrl"));
       const [sbKey,setSbKey]           = useState(()=>getCredential("sb-key","sbKey"));
       const [dataSource,setDataSource] = useState("demo");
+      const [mainTab,setMainTab]       = useState("hitters");  // "hitters" | "pitchers"
       const [roster,setRoster]         = useState([]);
       const [rosterLoading,setRosterLoading] = useState(false);
       const [rosterError,setRosterError]     = useState("");
@@ -501,7 +862,6 @@
         if(dataSource==="mlb"){
           setRoster(Object.keys(MLB_IDS).map(name=>({player_name:name,team:"MLB"}))); setSelectedPlayer(null); setRosterError(""); return;
         }
-        // Supabase / live mode
         if(!sbUrl||!sbKey){
           setRoster([]); setSelectedPlayer(null);
           setRosterError("Enter your Supabase URL and API key above, then click Connect.");
@@ -555,7 +915,6 @@
         setDataLoading(false);
       },[selectedPlayer,dataSource,sbUrl,sbKey]);
 
-      // Pre-fill prediction cache for demo players so sort works immediately
       useEffect(()=>{
         if(dataSource!=="demo") return;
         const cache={};
@@ -586,8 +945,6 @@
       const saveCredentials = ()=>{
         localStorage.setItem("sbUrl",sbUrl);
         localStorage.setItem("sbKey",sbKey);
-        // Force an immediate fetch using the current input values rather than
-        // waiting for state to propagate through useCallback's stale closure.
         setRosterLoading(true); setRosterError("");
         fetchRoster(sbUrl,sbKey)
           .then(players=>{
@@ -600,11 +957,6 @@
 
       const currentCycleDay = gameData.length?gameData[gameData.length-1].cycleDay:0;
       const currentPhase = getPhase(currentCycleDay);
-      const cycleData = Array.from({length:CYCLE_LENGTH},(_,i)=>{
-        const ph=getPhase(i), dg=gameData.filter(g=>g.cycleDay===i);
-        const avg=dg.length?dg.reduce((s,g)=>s+g.avg,0)/dg.length:null;
-        return{day:i+1, avg:avg?+avg.toFixed(3):null, phase:ph.name, color:ph.color};
-      });
 
       const teams = ["ALL",...Array.from(new Set(roster.map(p=>p.team))).sort()];
       const filteredRoster = roster
@@ -624,21 +976,12 @@
         setAiLoading(true);
         const last10=gameData.slice(-10), l10H=last10.reduce((a,g)=>a+g.hits,0), l10AB=last10.reduce((a,g)=>a+g.ab,0), l10HR=last10.reduce((a,g)=>a+g.hr,0);
         const last5=gameData.slice(-5), l5H=last5.reduce((a,g)=>a+g.hits,0), l5AB=last5.reduce((a,g)=>a+g.ab,0);
-
-        const ssLine=seasonStats
-          ?`Season ${SEASON}: AVG ${seasonStats.avg}, OPS ${seasonStats.ops}, HR ${seasonStats.hr}, RBI ${seasonStats.rbi}, G ${seasonStats.games}`
-          :`${gameData.length} games sampled`;
-
-        // FFT cycle data — use detected cycles if available, fall back to fixed 28-day
+        const ssLine=seasonStats?`Season ${SEASON}: AVG ${seasonStats.avg}, OPS ${seasonStats.ops}, HR ${seasonStats.hr}, RBI ${seasonStats.rbi}, G ${seasonStats.games}`:`${gameData.length} games sampled`;
         let cycleSection;
         if(cycleAnalysis && cycleAnalysis.dominantCycles.length > 0){
-          const cycles = cycleAnalysis.dominantCycles
-            .map((c,i)=>`  Cycle ${i+1}: ${c.periodDays}-day period, ${c.pctVariance}% of variance, amplitude ${c.amplitude.toFixed(3)}`)
-            .join("\n");
-          // Forecast direction over next 7 days
+          const cycles = cycleAnalysis.dominantCycles.map((c,i)=>`  Cycle ${i+1}: ${c.periodDays}-day period, ${c.pctVariance}% of variance, amplitude ${c.amplitude.toFixed(3)}`).join("\n");
           const fv = cycleAnalysis.forecastValues.slice(0,7);
-          const fStart = fv[0], fEnd = fv[fv.length-1];
-          const fSlope = fEnd - fStart;
+          const fSlope = fv[fv.length-1] - fv[0];
           const fDir = fSlope > 0.015 ? "strongly rising" : fSlope > 0.005 ? "rising" : fSlope < -0.015 ? "strongly falling" : fSlope < -0.005 ? "falling" : "flat";
           const fAvg = (fv.reduce((a,b)=>a+b,0)/fv.length + cycleAnalysis.mean).toFixed(3);
           cycleSection=`Detected performance cycles (DFT analysis, R²=${cycleAnalysis.r2.toFixed(2)}):\n${cycles}\nForecast next 7 games: trend is ${fDir}, projected avg ~${fAvg}`;
@@ -646,9 +989,7 @@
           const ps=PHASE_CONFIG.map(p=>`  ${p.name}: AVG ${phaseAvg(gameData,p.name,"avg")}, OPS ${phaseAvg(gameData,p.name,"ops")}`).join("\n");
           cycleSection=`Fixed 28-day cycle phase averages (insufficient data for DFT):\n${ps}\nCurrent: ${currentPhase?.name} phase, day ${currentCycleDay+1}/${CYCLE_LENGTH}`;
         }
-
         const predLine=currentPred?`\nPerformance prediction score: ${currentPred.score}/99 (${currentPred.tier}) — ${currentPred.label}`:"";
-
         const prompt=`You are a baseball analytics AI specializing in time-series performance cycle analysis.
 
 Player: ${selectedPlayer?.player_name} (${seasonStats?.team||selectedPlayer?.team||""})
@@ -711,25 +1052,47 @@ Based specifically on the detected cycle periods and forecast direction above �
               {(rosterError||dataError)&&<div style={{marginTop:10,padding:"8px 12px",background:"#450a0a",borderRadius:6,fontSize:12,color:"#fca5a5"}}>⚠️ {rosterError||dataError}</div>}
             </div>
 
+            {/* ── Main tab bar: Hitters / Pitchers ── */}
+            <div style={{display:"flex",gap:4,marginBottom:16,borderBottom:"1px solid #334155",paddingBottom:0}}>
+              {[["hitters","🏏 Hitters"],["pitchers","⚾ Pitchers"]].map(([tab,label])=>(
+                <button key={tab} onClick={()=>setMainTab(tab)}
+                  style={{padding:"9px 20px",borderRadius:"8px 8px 0 0",border:"none",cursor:"pointer",fontWeight:700,fontSize:13,
+                    background:mainTab===tab?"#1e293b":"transparent",
+                    color:mainTab===tab?"#f1f5f9":"#64748b",
+                    borderBottom:mainTab===tab?"2px solid #3b82f6":"2px solid transparent",
+                    marginBottom:"-1px"}}>
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {/* ── PITCHERS TAB ── */}
+            {mainTab === "pitchers" && (
+              <PitchersTab
+                dataSource={dataSource}
+                sbUrl={sbUrl}
+                sbKey={sbKey}
+                teamFilter={teamFilter}
+              />
+            )}
+
+            {/* ── HITTERS TAB ── */}
+            {mainTab === "hitters" && (
             <div style={{display:"grid",gridTemplateColumns:"280px 1fr",gap:16,alignItems:"start"}}>
 
               {/* Sidebar */}
               <div style={{...s.card,padding:12}}>
                 <div style={{fontSize:12,fontWeight:700,color:"#94a3b8",marginBottom:10}}>PLAYERS</div>
                 <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Search…" style={{...s.input,marginBottom:8}}/>
-
-                {/* Sort toggle */}
                 <div style={{display:"flex",gap:6,marginBottom:8}}>
                   <button onClick={()=>setSortBy("name")} style={{...s.btn(sortBy==="name"),flex:1,padding:"5px 8px",fontSize:11}}>A–Z</button>
                   <button onClick={()=>setSortBy("prediction")} style={{...s.btn(sortBy==="prediction","#f59e0b"),flex:1,padding:"5px 8px",fontSize:11}}>🔮 Predicted</button>
                 </div>
-
                 {dataSource!=="mlb"&&sortBy==="name"&&(
                   <select value={teamFilter} onChange={e=>setTeamFilter(e.target.value)} style={{...s.input,marginBottom:8,cursor:"pointer"}}>
                     {teams.map(t=><option key={t} value={t}>{t==="ALL"?"All Teams":t}</option>)}
                   </select>
                 )}
-
                 <div style={{maxHeight:520,overflowY:"auto",fontSize:12}}>
                   {Object.keys(grouped).sort().map(groupKey=>(
                     <div key={groupKey}>
@@ -834,7 +1197,7 @@ Based specifically on the detected cycle periods and forecast direction above �
                       </div>
                     )}
 
-                    {/* Cycle — FFT-based player-specific cycle analysis */}
+                    {/* Cycle */}
                     {view==="cycle"&&(()=>{
                       const merged = buildCycleChartData(gameData, cycleAnalysis);
                       const yVals = merged.map(p=>p.actual||p.fitted||p.forecast).filter(Boolean);
@@ -843,12 +1206,9 @@ Based specifically on the detected cycle periods and forecast direction above �
                       return(
                       <div style={{...s.card,padding:"20px 12px 12px"}}>
                         {!cycleAnalysis ? (
-                          <div style={{color:"#64748b",fontSize:12,padding:20,textAlign:"center"}}>
-                            Not enough data for cycle analysis — need at least 10 games.
-                          </div>
+                          <div style={{color:"#64748b",fontSize:12,padding:20,textAlign:"center"}}>Not enough data for cycle analysis — need at least 10 games.</div>
                         ) : (
                           <>
-                            {/* Cycle summary chips */}
                             <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
                               <span style={{fontSize:11,color:"#64748b",marginRight:4}}>Detected cycles:</span>
                               {cycleAnalysis.dominantCycles.map((c,i)=>(
@@ -860,61 +1220,37 @@ Based specifically on the detected cycle periods and forecast direction above �
                               ))}
                               <span style={{fontSize:11,color:"#475569",marginLeft:"auto"}}>R² {cycleAnalysis.r2.toFixed(2)}</span>
                             </div>
-
-                            {/* Combined historical + forecast chart */}
                             <ResponsiveContainer width="100%" height={220}>
                               <AreaChart data={merged} margin={{left:-10,right:10}}>
                                 <defs>
-                                  <linearGradient id="actualGrad" x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="5%"  stopColor="#3b82f6" stopOpacity={0.15}/>
-                                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
-                                  </linearGradient>
-                                  <linearGradient id="fitGrad" x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="5%"  stopColor="#22c55e" stopOpacity={0.20}/>
-                                    <stop offset="95%" stopColor="#22c55e" stopOpacity={0}/>
-                                  </linearGradient>
-                                  <linearGradient id="fcastGrad" x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="5%"  stopColor="#f59e0b" stopOpacity={0.30}/>
-                                    <stop offset="95%" stopColor="#f59e0b" stopOpacity={0}/>
-                                  </linearGradient>
+                                  <linearGradient id="actualGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#3b82f6" stopOpacity={0.15}/><stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/></linearGradient>
+                                  <linearGradient id="fitGrad"    x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#22c55e" stopOpacity={0.20}/><stop offset="95%" stopColor="#22c55e" stopOpacity={0}/></linearGradient>
+                                  <linearGradient id="fcastGrad"  x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#f59e0b" stopOpacity={0.30}/><stop offset="95%" stopColor="#f59e0b" stopOpacity={0}/></linearGradient>
                                 </defs>
                                 <CartesianGrid strokeDasharray="3 3" stroke="#334155"/>
-                                <XAxis dataKey="date" tick={{fontSize:9,fill:"#64748b"}}
-                                  interval={Math.max(1,Math.floor(merged.length/9))}/>
+                                <XAxis dataKey="date" tick={{fontSize:9,fill:"#64748b"}} interval={Math.max(1,Math.floor(merged.length/9))}/>
                                 <YAxis domain={[yMin,yMax]} tick={{fontSize:10,fill:"#64748b"}}/>
-                                <Tooltip
-                                  content={({active,payload,label})=>{
-                                    if(!active||!payload?.length) return null;
-                                    const isFc = payload[0]?.payload?.isForecast;
-                                    const vals = payload.filter(p=>p.value!=null);
-                                    return(
-                                      <div style={{background:"#1e293b",border:`1px solid ${isFc?"#f59e0b":"#334155"}`,borderRadius:8,padding:"8px 12px",fontSize:12}}>
-                                        <div style={{color:"#94a3b8",marginBottom:3}}>{label}{isFc?" (forecast)":""}</div>
-                                        {vals.map(p=>(
-                                          <div key={p.dataKey} style={{color:p.color}}>
-                                            {p.dataKey==="actual"?"Actual":p.dataKey==="fitted"?"FFT fit":"Forecast"}: <b>{(+p.value).toFixed(3)}</b>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    );
-                                  }}
-                                />
-                                <ReferenceLine x={gameData[gameData.length-1]?.date} stroke="#94a3b8" strokeDasharray="3 3"
-                                  label={{value:"NOW",fontSize:9,fill:"#94a3b8",position:"insideTopRight"}}/>
-                                {/* Actual avg — blue dots */}
-                                <Area type="monotone" dataKey="actual" connectNulls={false}
-                                  stroke="#3b82f6" strokeWidth={1.5} fill="url(#actualGrad)"
-                                  dot={({cx,cy,payload})=>payload.actual!=null?<circle key={cx} cx={cx} cy={cy} r={2} fill="#3b82f6" stroke="none"/>:<g key={cx}/>}/>
-                                {/* FFT reconstruction — green line, no fill in forecast zone */}
-                                <Area type="monotone" dataKey="fitted" connectNulls={false}
-                                  stroke="#22c55e" strokeWidth={2} fill="url(#fitGrad)" dot={false}/>
-                                {/* 14-day forecast — amber dashed, starts at last fitted point */}
-                                <Area type="monotone" dataKey="forecast" connectNulls={false}
-                                  stroke="#f59e0b" strokeWidth={2} strokeDasharray="5 3" fill="url(#fcastGrad)" dot={false}/>
+                                <Tooltip content={({active,payload,label})=>{
+                                  if(!active||!payload?.length) return null;
+                                  const isFc = payload[0]?.payload?.isForecast;
+                                  const vals = payload.filter(p=>p.value!=null);
+                                  return(
+                                    <div style={{background:"#1e293b",border:`1px solid ${isFc?"#f59e0b":"#334155"}`,borderRadius:8,padding:"8px 12px",fontSize:12}}>
+                                      <div style={{color:"#94a3b8",marginBottom:3}}>{label}{isFc?" (forecast)":""}</div>
+                                      {vals.map(p=>(
+                                        <div key={p.dataKey} style={{color:p.color}}>
+                                          {p.dataKey==="actual"?"Actual":p.dataKey==="fitted"?"FFT fit":"Forecast"}: <b>{(+p.value).toFixed(3)}</b>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  );
+                                }}/>
+                                <ReferenceLine x={gameData[gameData.length-1]?.date} stroke="#94a3b8" strokeDasharray="3 3" label={{value:"NOW",fontSize:9,fill:"#94a3b8",position:"insideTopRight"}}/>
+                                <Area type="monotone" dataKey="actual"   connectNulls={false} stroke="#3b82f6" strokeWidth={1.5} fill="url(#actualGrad)" dot={({cx,cy,payload})=>payload.actual!=null?<circle key={cx} cx={cx} cy={cy} r={2} fill="#3b82f6" stroke="none"/>:<g key={cx}/>}/>
+                                <Area type="monotone" dataKey="fitted"   connectNulls={false} stroke="#22c55e" strokeWidth={2}   fill="url(#fitGrad)"    dot={false}/>
+                                <Area type="monotone" dataKey="forecast" connectNulls={false} stroke="#f59e0b" strokeWidth={2}   strokeDasharray="5 3" fill="url(#fcastGrad)" dot={false}/>
                               </AreaChart>
                             </ResponsiveContainer>
-
-                            {/* Legend */}
                             <div style={{display:"flex",gap:16,justifyContent:"center",marginTop:10,flexWrap:"wrap"}}>
                               {[["#3b82f6","Actual avg"],["#22c55e","FFT reconstruction"],["#f59e0b","14-day forecast"]].map(([c,l])=>(
                                 <div key={l} style={{display:"flex",alignItems:"center",gap:5,fontSize:11}}>
@@ -922,8 +1258,6 @@ Based specifically on the detected cycle periods and forecast direction above �
                                 </div>
                               ))}
                             </div>
-
-                            {/* Dominant cycle cards */}
                             <div style={{display:"grid",gridTemplateColumns:`repeat(${Math.min(cycleAnalysis.dominantCycles.length,3)},1fr)`,gap:8,marginTop:14}}>
                               {cycleAnalysis.dominantCycles.slice(0,3).map((c,i)=>{
                                 const colors=["#22c55e","#3b82f6","#f59e0b","#ef4444","#a855f7"];
@@ -936,7 +1270,6 @@ Based specifically on the detected cycle periods and forecast direction above �
                                 );
                               })}
                             </div>
-
                             <div style={{marginTop:10,padding:"8px 10px",background:"#0f172a",borderRadius:6,fontSize:10,color:"#475569",lineHeight:1.5}}>
                               DFT on {gameData.length}-game batting avg signal. Top {cycleAnalysis.dominantCycles.length} frequency component{cycleAnalysis.dominantCycles.length!==1?"s":""} kept (amplitude ≥ 0.005, period ≥ 4 games). Forecast extrapolates these cycles {FORECAST_DAYS} games forward.
                             </div>
@@ -1008,7 +1341,7 @@ Based specifically on the detected cycle periods and forecast direction above �
                       </div>
                     )}
 
-                    {/* Predict tab */}
+                    {/* Predict */}
                     {view==="predict"&&(
                       <div style={{...s.card}}>
                         {currentPred
@@ -1033,6 +1366,8 @@ Based specifically on the detected cycle periods and forecast direction above �
                 )}
               </div>
             </div>
+            )}
+
           </div>
         </div>
       );
