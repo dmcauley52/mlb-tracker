@@ -350,7 +350,7 @@
       let offset = 0, all = [], page;
       do {
         page = await sbFetch(url, key,
-          `player_gamelogs?select=player_name,team&order=player_name.asc,team.asc&limit=${PAGE}&offset=${offset}`);
+          `player_gamelogs?select=player_name,team&is_starter=eq.true&order=player_name.asc,team.asc&limit=${PAGE}&offset=${offset}`);
         all = all.concat(page);
         offset += PAGE;
       } while (page.length === PAGE);
@@ -360,7 +360,7 @@
     async function fetchPlayerGames(url,key,playerName){
       const since = new Date(); since.setDate(since.getDate()-90);
       const iso = since.toISOString().split("T")[0];
-      return sbFetch(url,key,`player_gamelogs?player_name=eq.${encodeURIComponent(playerName)}&game_date=gte.${iso}&order=game_date.asc&select=*`);
+      return sbFetch(url,key,`player_gamelogs?player_name=eq.${encodeURIComponent(playerName)}&is_starter=eq.true&game_date=gte.${iso}&order=game_date.asc&select=*`);
     }
     function transformRows(rows){
       return rows.map((row,i)=>{
@@ -380,7 +380,7 @@
       let offset = 0, all = [], page;
       do {
         page = await sbFetch(url, key,
-          `pitcher_gamelogs?order=game_date.desc&is_starter=eq.true&season=eq.${SEASON}&limit=${PAGE}&offset=${offset}&select=*`);
+          `pitcher_gamelogs?order=game_date.desc&limit=${PAGE}&offset=${offset}&select=*`);
         all = all.concat(page);
         offset += PAGE;
       } while (page.length === PAGE);
@@ -406,9 +406,10 @@
         }).filter(v => !isNaN(v));
         const k9 = k9Vals.length ? (k9Vals.reduce((a, b) => a + b, 0) / k9Vals.length).toFixed(2) : '—';
         
+        const team = sorted[sorted.length - 1]?.team || '';
         const fftMetric = recent.some(g => g.game_score != null) ? 'game_score' : 'era';
         const { predictionScore, dominantCycleDays, forecast } = buildPitcherForecast(recent, fftMetric);
-        return { name, gamelogs: recent, era: avg('era'), whip: avg('whip'), k9, fftMetric, predictionScore, dominantCycleDays, forecast };
+        return { name, team, gamelogs: recent, era: avg('era'), whip: avg('whip'), k9, fftMetric, predictionScore, dominantCycleDays, forecast };
       });
     }
 
@@ -514,12 +515,18 @@
       const [pitcherView, setPitcherView]   = useState("trends");
       const [insight, setInsight]           = useState({});
       const [insightLoading, setInsightLoading] = useState({});
+      const [search, setSearch]             = useState("");
+      const [pitcherTeam, setPitcherTeam]   = useState("ALL");
 
       useEffect(() => {
         setLoading(true); setError(""); setPitchers([]); setSelected(null);
         if (dataSource === "live" && sbUrl && sbKey) {
           fetchPitchersFromDB(sbUrl, sbKey)
             .then(data => {
+              if (!data.length) {
+                setError("pitcher_gamelogs returned 0 rows. Check: (1) Supabase RLS — anon key needs SELECT policy on pitcher_gamelogs, (2) table has data for season " + SEASON + ".");
+                return;
+              }
               const sorted = data.sort((a,b) => b.predictionScore - a.predictionScore);
               setPitchers(sorted);
               setSelected(sorted[0] || null);
@@ -565,7 +572,10 @@
           const d = await res.json();
           setInsight(prev => ({...prev, [pitcher.name]: d.text || d.insight || 'No insight returned.'}));
         } catch(e) {
-          setInsight(prev => ({...prev, [pitcher.name]: 'Error: ' + e.message}));
+          const msg = e.message === 'Failed to fetch'
+            ? 'AI Scout requires the Vercel deployment — not available when running locally.'
+            : 'Error: ' + e.message;
+          setInsight(prev => ({...prev, [pitcher.name]: msg}));
         }
         setInsightLoading(prev => ({...prev, [pitcher.name]: false}));
       };
@@ -575,13 +585,20 @@
         btn: (active, color="#3b82f6") => ({padding:"7px 14px",borderRadius:8,border:"none",cursor:"pointer",fontWeight:700,fontSize:12,background:active?color:"#334155",color:active?"#fff":"#94a3b8"}),
       };
 
-      const sorted = [...pitchers].sort((a, b) => {
-        if (sortBy === 'predictionScore') return b.predictionScore - a.predictionScore;
-        if (sortBy === 'era')  return parseFloat(a.era)  - parseFloat(b.era);
-        if (sortBy === 'whip') return parseFloat(a.whip) - parseFloat(b.whip);
-        if (sortBy === 'k9')   return parseFloat(b.k9)   - parseFloat(a.k9);
-        return 0;
-      });
+      const teams = ["ALL", ...Array.from(new Set(pitchers.map(p => p.team).filter(Boolean))).sort()];
+
+      const sorted = [...pitchers]
+        .filter(p =>
+          (pitcherTeam === "ALL" || p.team === pitcherTeam) &&
+          p.name.toLowerCase().includes(search.toLowerCase())
+        )
+        .sort((a, b) => {
+          if (sortBy === 'predictionScore') return b.predictionScore - a.predictionScore;
+          if (sortBy === 'era')  return parseFloat(a.era)  - parseFloat(b.era);
+          if (sortBy === 'whip') return parseFloat(a.whip) - parseFloat(b.whip);
+          if (sortBy === 'k9')   return parseFloat(b.k9)   - parseFloat(a.k9);
+          return 0;
+        });
 
       if (loading) return <div style={{...s.card,textAlign:"center",padding:60,color:"#64748b"}}>Loading pitcher data…</div>;
       if (error)   return <div style={{...s.card,padding:20,color:"#fca5a5"}}>⚠️ {error}</div>;
@@ -593,6 +610,14 @@
           {/* Pitcher sidebar */}
           <div style={{...s.card,padding:12}}>
             <div style={{fontSize:12,fontWeight:700,color:"#94a3b8",marginBottom:10}}>PITCHERS</div>
+            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Search…"
+              style={{background:"#0f172a",border:"1px solid #334155",borderRadius:6,padding:"7px 10px",color:"#f1f5f9",fontSize:12,width:"100%",boxSizing:"border-box",marginBottom:8}}/>
+            {dataSource === "live" && (
+              <select value={pitcherTeam} onChange={e=>setPitcherTeam(e.target.value)}
+                style={{background:"#0f172a",border:"1px solid #334155",borderRadius:6,padding:"7px 10px",color:"#f1f5f9",fontSize:12,width:"100%",boxSizing:"border-box",marginBottom:8,cursor:"pointer"}}>
+                {teams.map(t => <option key={t} value={t}>{t === "ALL" ? "All Teams" : t}</option>)}
+              </select>
+            )}
             <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}>
               {[["predictionScore","🔮 Score"],["era","ERA"],["whip","WHIP"],["k9","K/9"]].map(([v,label])=>(
                 <button key={v} onClick={()=>setSortBy(v)}
@@ -601,7 +626,10 @@
                 </button>
               ))}
             </div>
-            <div style={{maxHeight:520,overflowY:"auto",fontSize:12}}>
+            <div style={{maxHeight:480,overflowY:"auto",fontSize:12}}>
+              {sorted.length === 0 && (
+                <div style={{color:"#475569",fontStyle:"italic",padding:8}}>No pitchers match.</div>
+              )}
               {sorted.map((p, rank) => {
                 const isSel = selected?.name === p.name;
                 const color = scoreColor(p.predictionScore);
@@ -617,10 +645,13 @@
                       <span style={{fontSize:11,fontWeight:700,color:isSel?"#fff":color}}>{p.predictionScore}</span>
                     </div>
                     {!isSel && (
-                      <div style={{display:"flex",gap:8,fontSize:10,color:"#64748b"}}>
-                        <span>ERA <b style={{color:"#94a3b8"}}>{p.era}</b></span>
-                        <span>WHIP <b style={{color:"#94a3b8"}}>{p.whip}</b></span>
-                        <span>K/9 <b style={{color:"#94a3b8"}}>{p.k9}</b></span>
+                      <div style={{fontSize:10,color:"#64748b"}}>
+                        {p.team && <div style={{color:"#475569",marginBottom:2}}>{p.team}</div>}
+                        <div style={{display:"flex",gap:8}}>
+                          <span>ERA <b style={{color:"#94a3b8"}}>{p.era}</b></span>
+                          <span>WHIP <b style={{color:"#94a3b8"}}>{p.whip}</b></span>
+                          <span>K/9 <b style={{color:"#94a3b8"}}>{p.k9}</b></span>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -636,6 +667,7 @@
               <div style={{...s.card,marginBottom:12,borderLeft:"4px solid #a855f7",display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:12}}>
                 <div style={{flex:1,minWidth:200}}>
                   <div style={{fontSize:18,fontWeight:800}}>{selected.name}</div>
+                  {selected.team && <div style={{fontSize:12,color:"#7c3aed",fontWeight:600,marginTop:1}}>{selected.team}</div>}
                   <div style={{fontSize:12,color:"#64748b",marginTop:2}}>
                     {selected.dominantCycleDays ? `Dominant cycle: ${selected.dominantCycleDays} starts` : "Cycle: analyzing…"}
                     {" · "}FFT Score {selected.predictionScore}/99
@@ -1026,7 +1058,7 @@ Based specifically on the detected cycle periods and forecast direction above �
           if(!res.ok){ const e=await res.text(); throw new Error(`API ${res.status}: ${e}`); }
           const d=await res.json();
           setAiInsight(d.text||"No insight returned.");
-        }catch(e){ setAiInsight("Error: "+e.message); }
+        }catch(e){ setAiInsight(e.message==="Failed to fetch"?"AI Scout requires the Vercel deployment — not available when running locally.":"Error: "+e.message); }
         setAiLoading(false);
       };
 
