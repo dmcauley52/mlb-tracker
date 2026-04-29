@@ -350,7 +350,7 @@
       let offset = 0, all = [], page;
       do {
         page = await sbFetch(url, key,
-          `player_gamelogs?select=player_name,team&is_starter=eq.true&order=player_name.asc,team.asc&limit=${PAGE}&offset=${offset}`);
+          `player_gamelogs?select=player_name,team&order=player_name.asc,team.asc&limit=${PAGE}&offset=${offset}`);
         all = all.concat(page);
         offset += PAGE;
       } while (page.length === PAGE);
@@ -360,7 +360,7 @@
     async function fetchPlayerGames(url,key,playerName){
       const since = new Date(); since.setDate(since.getDate()-90);
       const iso = since.toISOString().split("T")[0];
-      return sbFetch(url,key,`player_gamelogs?player_name=eq.${encodeURIComponent(playerName)}&is_starter=eq.true&game_date=gte.${iso}&order=game_date.asc&select=*`);
+      return sbFetch(url,key,`player_gamelogs?player_name=eq.${encodeURIComponent(playerName)}&game_date=gte.${iso}&order=game_date.asc&select=*`);
     }
     function transformRows(rows){
       return rows.map((row,i)=>{

@@ -77,7 +77,20 @@ for player in qualified:
                  walks, strikeouts, home_runs_allowed, era, whip,
                  pitches, strikes, game_score, is_starter)
                 VALUES (%s,%s,%s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s,%s,%s, %s,%s,%s,%s)
-                ON CONFLICT (player_id, game_date) DO NOTHING
+                ON CONFLICT (player_id, game_date) DO UPDATE SET
+                    innings_pitched=EXCLUDED.innings_pitched,
+                    hits_allowed=EXCLUDED.hits_allowed,
+                    runs_allowed=EXCLUDED.runs_allowed,
+                    earned_runs=EXCLUDED.earned_runs,
+                    walks=EXCLUDED.walks,
+                    strikeouts=EXCLUDED.strikeouts,
+                    home_runs_allowed=EXCLUDED.home_runs_allowed,
+                    era=EXCLUDED.era,
+                    whip=EXCLUDED.whip,
+                    pitches=EXCLUDED.pitches,
+                    strikes=EXCLUDED.strikes,
+                    game_score=EXCLUDED.game_score,
+                    is_starter=EXCLUDED.is_starter
             """, (
                 pid, name, gdate, SEASON, team, opponent,
                 ip,
