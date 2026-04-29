@@ -9,6 +9,7 @@
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
   <script src="https://unpkg.com/recharts@2.10.0/umd/Recharts.js"></script>
+  <script src="analytics.js"></script>
   <meta name="sb-url" content="%SB_URL%">
   <meta name="sb-key" content="%SB_KEY%">
   <meta name="default-team" content="%DEFAULT_TEAM%">
@@ -30,240 +31,9 @@
 
     const SEASON = 2026;
     const MIN_AT_BATS = 20;
-    const CYCLE_LENGTH = 28;
-    const PHASE_CONFIG = [
-      { name:"Peak",      start:0,  end:6,  color:"#22c55e", desc:"High energy, strong output" },
-      { name:"Ovulation", start:7,  end:13, color:"#3b82f6", desc:"Sustained performance window" },
-      { name:"Luteal",    start:14, end:20, color:"#f59e0b", desc:"Slight decline, still capable" },
-      { name:"Recovery",  start:21, end:27, color:"#ef4444", desc:"Rest & reset phase" },
-    ];
-    const getPhase = d => PHASE_CONFIG.find(p => d >= p.start && d <= p.end);
-
-    const UPCOMING_SCHEDULE = {
-      "New York Yankees":       { opponents:["TEX","TEX","TEX"], matchupFactor:1.15 },
-      "Los Angeles Dodgers":    { opponents:["MIA","MIA","MIA"], matchupFactor:1.20 },
-      "Houston Astros":         { opponents:["BAL","BAL"],       matchupFactor:1.05 },
-      "Seattle Mariners":       { opponents:["MIN","MIN","MIN"], matchupFactor:1.08 },
-      "Boston Red Sox":         { opponents:["TOR","TOR","TOR"], matchupFactor:1.05 },
-      "San Diego Padres":       { opponents:["CHC","CHC","CHC"], matchupFactor:1.10 },
-      "Chicago Cubs":           { opponents:["SD","SD","SD"],    matchupFactor:0.95 },
-      "Atlanta Braves":         { opponents:["DET","DET","DET"], matchupFactor:1.18 },
-      "Philadelphia Phillies":  { opponents:["SF","SF","SF"],    matchupFactor:1.02 },
-      "Cleveland Guardians":    { opponents:["TB","TB","TB"],    matchupFactor:1.05 },
-      "Tampa Bay Rays":         { opponents:["CLE","CLE","CLE"], matchupFactor:0.98 },
-      "Minnesota Twins":        { opponents:["SEA","SEA","SEA"], matchupFactor:0.97 },
-      "St. Louis Cardinals":    { opponents:["PIT","PIT","PIT"], matchupFactor:1.18 },
-      "Kansas City Royals":     { opponents:["ATH","ATH"],       matchupFactor:1.12 },
-      "Cincinnati Reds":        { opponents:["COL","COL","COL"], matchupFactor:1.22 },
-      "Pittsburgh Pirates":     { opponents:["STL","STL","STL"], matchupFactor:0.92 },
-      "Baltimore Orioles":      { opponents:["HOU","HOU"],       matchupFactor:0.95 },
-      "Toronto Blue Jays":      { opponents:["BOS","BOS","BOS"], matchupFactor:1.00 },
-      "Texas Rangers":          { opponents:["NYY","NYY","NYY"], matchupFactor:0.90 },
-      "Chicago White Sox":      { opponents:["LAA","LAA","LAA"], matchupFactor:1.10 },
-      "default":                { opponents:[],                  matchupFactor:1.00 },
-    };
-
-    function computePredictionScore(playerName, teamName, gameData, seasonStats) {
-      if (!gameData || gameData.length < 3) return { score:50, label:"Insufficient data", tier:"neutral", breakdown:{phaseScore:0,trendScore:0,opsScore:0,momentumScore:0,matchupScore:0}, opponents:[] };
-
-      let phaseScore = 15;
-      let phaseLabel = "current cycle";
-      const analysis = analyzePlayerCycles(gameData);
-      if (analysis && analysis.forecastValues.length > 0) {
-        const f = analysis.forecastValues;
-        const trend3  = f.slice(0,3).reduce((a,b)=>a+b,0)/3;
-        const trend3b = f.slice(1,4).reduce((a,b)=>a+b,0)/3;
-        const slope   = trend3b - trend3;
-        const level   = f[0] - analysis.mean;
-        phaseScore = slope > 0.010 ? 30 : slope > 0.004 ? 26
-                   : slope > 0     ? 20 : slope > -0.004 ? 14
-                   : slope > -0.010 ? 8 : 4;
-        if (level > 0.015) phaseScore = Math.min(30, phaseScore + 4);
-        const topPeriod = analysis.dominantCycles[0]?.periodDays;
-        phaseLabel = topPeriod
-          ? (slope > 0 ? `rising ${topPeriod}d cycle` : `falling ${topPeriod}d cycle`)
-          : (slope > 0 ? "rising cycle" : "falling cycle");
-      } else {
-        const lastCycleDay = gameData[gameData.length - 1]?.cycleDay ?? 0;
-        const nextCycleDay = (lastCycleDay + 1) % CYCLE_LENGTH;
-        const np = getPhase(nextCycleDay);
-        phaseScore = np.name === "Peak" ? 30 : np.name === "Ovulation" ? 22 : np.name === "Luteal" ? 12 : 4;
-        phaseLabel = np.name + " phase";
-      }
-
-      const last5     = gameData.slice(-5);
-      const last5Avg  = last5.reduce((s,g) => s + g.avg, 0) / last5.length;
-      const trendScore = Math.min(25, Math.round(last5Avg * 75));
-
-      const ops      = seasonStats ? parseFloat(seasonStats.ops) : 0;
-      const opsScore = ops >= 0.900 ? 20 : ops >= 0.800 ? 16 : ops >= 0.700 ? 11 : ops >= 0.600 ? 6 : 3;
-
-      const last10     = gameData.slice(-10);
-      const firstHalf  = last10.slice(0,5).reduce((s,g) => s + g.avg, 0) / 5;
-      const secondHalf = last10.slice(5).reduce((s,g) => s + g.avg, 0) / Math.max(last10.slice(5).length, 1);
-      const momentumScore = secondHalf > firstHalf ? Math.min(15, Math.round((secondHalf - firstHalf) * 100)) : 0;
-
-      const sched       = UPCOMING_SCHEDULE[teamName] || UPCOMING_SCHEDULE["default"];
-      const matchupScore = Math.max(0, Math.min(10, Math.round((sched.matchupFactor - 0.85) / 0.45 * 10)));
-
-      const score = Math.min(99, Math.max(1, phaseScore + trendScore + opsScore + momentumScore + matchupScore));
-      const tier  = score >= 75 ? "hot" : score >= 55 ? "warm" : score >= 35 ? "neutral" : "cold";
-      const label = score >= 75 ? `Fire — ${phaseLabel}, strong outlook`
-                  : score >= 55 ? `Trending up — ${phaseLabel}`
-                  : score >= 35 ? `Steady — ${phaseLabel}`
-                  : `Cooling off — ${phaseLabel}`;
-
-      return { score, tier, label, phaseLabel, opponents: sched.opponents,
-               breakdown: { phaseScore, trendScore, opsScore, momentumScore, matchupScore } };
-    }
 
     const TIER_COLOR = { hot:"#22c55e", warm:"#f59e0b", neutral:"#64748b", cold:"#ef4444" };
 
-    // ── DFT cycle analysis (hitters) ─────────────────────────────────────────
-    function dft(signal) {
-      const N = signal.length;
-      const re = new Float64Array(N), im = new Float64Array(N);
-      for (let k = 0; k < N; k++) {
-        for (let n = 0; n < N; n++) {
-          const angle = (2 * Math.PI * k * n) / N;
-          re[k] += signal[n] * Math.cos(angle);
-          im[k] -= signal[n] * Math.sin(angle);
-        }
-        re[k] /= N; im[k] /= N;
-      }
-      return { re, im };
-    }
-
-    function reconstructAt(components, N, positions) {
-      return positions.map(x => {
-        let v = 0;
-        for (const { k, re, im } of components) {
-          const angle = (2 * Math.PI * k * x) / N;
-          v += re * Math.cos(angle) - im * Math.sin(angle);
-        }
-        return v;
-      });
-    }
-
-    const FORECAST_DAYS = 14;
-    const MAX_COMPONENTS = 5;
-    const MIN_PERIOD = 4;
-    const MIN_AMPLITUDE = 0.005;
-
-    function analyzePlayerCycles(gameData) {
-      const N = gameData.length;
-      if (N < 10) return null;
-      const raw = gameData.map(g => g.avg);
-      const mean = raw.reduce((a,b)=>a+b,0) / N;
-      const signal = raw.map(v => v - mean);
-      const { re, im } = dft(signal);
-      const spectrum = [];
-      for (let k = 1; k <= Math.floor(N / 2); k++) {
-        const amp = 2 * Math.sqrt(re[k]*re[k] + im[k]*im[k]);
-        const periodDays = N / k;
-        if (periodDays < MIN_PERIOD) continue;
-        spectrum.push({ k, amp, periodDays, re: re[k], im: im[k] });
-      }
-      spectrum.sort((a,b) => b.amp - a.amp);
-      const totalPower = spectrum.reduce((s,c) => s + c.amp*c.amp, 0) || 1;
-      const kept = spectrum.filter(c => c.amp >= MIN_AMPLITUDE).slice(0, MAX_COMPONENTS);
-      if (kept.length === 0) return null;
-      const components = [{ k:0, re: mean, im: 0 }, ...kept];
-      const positions = Array.from({ length: N }, (_,i) => i);
-      const reconstructed = reconstructAt(components, N, positions);
-      const ssTot = raw.reduce((s,v) => s + (v-mean)**2, 0);
-      const ssRes = raw.reduce((s,v,i) => s + (v-reconstructed[i])**2, 0);
-      const r2 = ssTot > 0 ? Math.max(0, 1 - ssRes/ssTot) : 0;
-      const forecastPositions = Array.from({ length: FORECAST_DAYS }, (_,i) => N + i);
-      const forecastValues = reconstructAt(components, N, forecastPositions);
-      const dominantCycles = kept.map(c => ({
-        periodDays: +c.periodDays.toFixed(1),
-        amplitude:  +c.amp.toFixed(4),
-        pctVariance: +(100 * c.amp*c.amp / totalPower).toFixed(1),
-      }));
-      return { dominantCycles, reconstructed, forecastValues, components, N, mean, r2 };
-    }
-
-    function buildCycleChartData(gameData, analysis) {
-      if (!analysis) return [];
-      const { reconstructed, forecastValues } = analysis;
-      const historical = gameData.map((g,i) => ({
-        date:     g.date,
-        actual:   +g.avg.toFixed(3),
-        fitted:   +Math.max(0.050, reconstructed[i]).toFixed(3),
-        forecast: null,
-      }));
-      const lastFitted = historical.length ? historical[historical.length-1].fitted : 0;
-      const forecastPoints = forecastValues.map((v,i) => ({
-        date:     `+${i+1}d`,
-        actual:   null,
-        fitted:   null,
-        forecast: +Math.max(0.050, v).toFixed(3),
-        isForecast: true,
-      }));
-      if (forecastPoints.length && historical.length) {
-        forecastPoints.unshift({
-          date:     historical[historical.length-1].date,
-          actual:   null,
-          fitted:   lastFitted,
-          forecast: +Math.max(0.050, forecastValues[0]).toFixed(3),
-          isForecast: false,
-        });
-      }
-      return [...historical, ...forecastPoints];
-    }
-
-    // ── Pitcher FFT helpers ───────────────────────────────────────────────────
-    function fftPitcher(values) {
-      const N = values.length;
-      if (N < 4) return { dominantCycleDays: null, amplitude: 0, predictionScore: 0 };
-      const mean = values.reduce((a, b) => a + b, 0) / N;
-      const signal = values.map(v => v - mean);
-      // Simple DFT (reuse same approach as hitter engine)
-      const re = new Float64Array(N), im = new Float64Array(N);
-      for (let k = 0; k < N; k++) {
-        for (let n = 0; n < N; n++) {
-          const angle = (2 * Math.PI * k * n) / N;
-          re[k] += signal[n] * Math.cos(angle);
-          im[k] -= signal[n] * Math.sin(angle);
-        }
-        re[k] /= N; im[k] /= N;
-      }
-      let bestIdx = 1, bestMag = 0;
-      for (let i = 1; i <= Math.floor(N / 2); i++) {
-        const mag = 2 * Math.sqrt(re[i]*re[i] + im[i]*im[i]);
-        if (mag > bestMag) { bestMag = mag; bestIdx = i; }
-      }
-      const cycleDays = Math.round(N / bestIdx);
-      const amplitude = bestMag;
-      const variance = signal.reduce((a, b) => a + b * b, 0) / N;
-      const score = variance > 0 ? Math.min(99, Math.round((amplitude / Math.sqrt(variance)) * 33)) : 0;
-      return { dominantCycleDays: cycleDays, amplitude, predictionScore: score };
-    }
-
-    function buildPitcherForecast(gamelogs, metric) {
-      const vals = gamelogs.map(g => parseFloat(g[metric]) || 0);
-      const { dominantCycleDays, predictionScore } = fftPitcher(vals);
-      if (!dominantCycleDays) return { forecast: [], predictionScore: 0, dominantCycleDays: null };
-      const last = vals.slice(-dominantCycleDays);
-      const lastDate = new Date(gamelogs[gamelogs.length - 1].game_date + "T12:00:00");
-      const forecast = Array.from({ length: 14 }, (_, i) => {
-        const d = new Date(lastDate);
-        d.setDate(d.getDate() + i + 1);
-        const idx = i % dominantCycleDays;
-        return {
-          date: d.toISOString().slice(0, 10),
-          value: +(last[idx % last.length] || 0).toFixed(3),
-        };
-      });
-      return { forecast, predictionScore, dominantCycleDays };
-    }
-
-    function scoreColor(score) {
-      if (score >= 75) return '#22c55e';
-      if (score >= 50) return '#f59e0b';
-      return '#ef4444';
-    }
 
     // MLB player ID lookup
     const MLB_IDS = {
@@ -321,10 +91,6 @@
       "Jacob deGrom","Shane Bieber","Corbin Burnes","Sandy Alcantara",
     ].map((name, i) => ({ name, gamelogs: genDemoPitcher(name, i * 1.7 + 1) }));
 
-    const phaseAvg = (games,ph,stat) => {
-      const f = games.filter(g=>g.phase===ph);
-      return f.length ? (f.reduce((s,g)=>s+g[stat],0)/f.length).toFixed(3) : "—";
-    };
 
     const CustomTooltip = ({active,payload}) => {
       if(!active||!payload?.length) return null;
@@ -361,17 +127,6 @@
       const since = new Date(); since.setDate(since.getDate()-90);
       const iso = since.toISOString().split("T")[0];
       return sbFetch(url,key,`player_gamelogs?player_name=eq.${encodeURIComponent(playerName)}&game_date=gte.${iso}&order=game_date.asc&select=*`);
-    }
-    function transformRows(rows){
-      return rows.map((row,i)=>{
-        const cyc=i%CYCLE_LENGTH, ph=getPhase(cyc), avg=parseFloat(row.batting_avg)||0;
-        return{
-          date:new Date(row.game_date+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"}),
-          cycleDay:cyc, phase:ph.name, phaseColor:ph.color,
-          avg:+avg.toFixed(3), ops:+(parseFloat(row.ops)||avg*1.7).toFixed(3),
-          hits:row.hits||0, hr:row.home_runs||0, ab:row.at_bats||0, rbi:row.rbi||0,
-        };
-      });
     }
 
     // Fetch pitchers from Supabase
@@ -435,17 +190,6 @@
     async function mlbFetchInfo(id){
       const r = await fetch(`https://statsapi.mlb.com/api/v1/people/${id}?hydrate=currentTeam`);
       const d = await r.json(); return d.people?.[0]||{};
-    }
-    function transformMLBSplits(splits){
-      return splits.filter(s=>(s.stat?.atBats||0)>0).map((s,i)=>{
-        const cyc=i%CYCLE_LENGTH, ph=getPhase(cyc), avg=parseFloat(s.stat?.avg)||0, obp=parseFloat(s.stat?.obp)||0, slg=parseFloat(s.stat?.slg)||0;
-        return{
-          date:s.date?new Date(s.date+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"}):`G${i+1}`,
-          cycleDay:cyc, phase:ph.name, phaseColor:ph.color,
-          avg:+avg.toFixed(3), ops:+(obp+slg).toFixed(3),
-          hits:s.stat?.hits||0, hr:s.stat?.homeRuns||0, ab:s.stat?.atBats||0, rbi:s.stat?.rbi||0,
-        };
-      });
     }
 
     // Score bar
