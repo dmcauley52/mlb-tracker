@@ -32,7 +32,7 @@
     const SEASON = 2026;
     const MIN_AT_BATS = 20;
 
-    const TIER_COLOR = { hot:"#22c55e", warm:"#f59e0b", neutral:"#64748b", cold:"#ef4444" };
+    const TIER_COLOR = { hot:"#22c55e", warm:"#f59e0b", neutral:"#60a5fa", cold:"#ef4444" };
 
 
     // MLB player ID lookup
@@ -61,8 +61,8 @@
       return {
         date: d.toLocaleDateString("en-US",{month:"short",day:"numeric"}),
         cycleDay:cyc, phase:ph.name, phaseColor:ph.color,
-        avg:+avg.toFixed(3), ops:+(avg*1.7+rng(seed*i+2)*0.15).toFixed(3),
-        hits:Math.floor(rng(seed*i+3)*3)+(ph.name==="Peak"?1:0),
+        avg:+avg.toFixed(3), ops:+(avg*1.7+rng(seed*i+2)*0.15).toFixed(3), signal:+avg.toFixed(3), woba:null,
+        hits:Math.floor(rng(seed*i+3)*3)+(ph.name==="Surge"?1:0),
         hr:rng(seed*i+4)>0.88?1:0, ab:Math.floor(rng(seed*i+5)*3)+2, rbi:0,
       };
     });
@@ -99,7 +99,7 @@
         <div style={{background:"#1e293b",border:`1px solid ${d.phaseColor||"#334155"}`,borderRadius:8,padding:"10px 14px",fontSize:12}}>
           <div style={{color:"#94a3b8",marginBottom:4}}>{d.date}</div>
           <div style={{color:d.phaseColor,fontWeight:700,marginBottom:6}}>📍 {d.phase} (Day {d.cycleDay+1})</div>
-          <div style={{color:"#f1f5f9"}}>AVG: <b>{(+d.avg).toFixed(3)}</b> · OPS: <b>{(+d.ops).toFixed(3)}</b></div>
+          <div style={{color:"#f1f5f9"}}>AVG: <b>{(+d.avg).toFixed(3)}</b> · OPS: <b>{(+d.ops).toFixed(3)}</b>{d.woba!=null?<> · wOBA: <b style={{color:"#f59e0b"}}>{(+d.woba).toFixed(3)}</b></>:null}</div>
           <div style={{color:"#f1f5f9"}}>Hits: <b>{d.hits}</b> · HR: <b>{d.hr}</b>{d.ab?` · AB: `+d.ab:""}</div>
         </div>
       );
@@ -116,12 +116,46 @@
       let offset = 0, all = [], page;
       do {
         page = await sbFetch(url, key,
-          `player_gamelogs?select=player_name,team&order=player_name.asc,team.asc&limit=${PAGE}&offset=${offset}`);
+          `player_gamelogs?select=player_name,team,position,at_bats,woba,obp,home_runs,stolen_bases,batting_order&order=player_name.asc,team.asc,game_date.desc&limit=${PAGE}&offset=${offset}`);
         all = all.concat(page);
         offset += PAGE;
       } while (page.length === PAGE);
-      const seen = new Set();
-      return all.filter(r=>{const k=`${r.player_name}||${r.team}`;if(seen.has(k))return false;seen.add(k);return true;});
+      const map = {};
+      all.forEach(r=>{
+        const k = `${r.player_name}||${(r.team||"").trim()}`;
+        if(!map[k]) map[k] = {player_name:r.player_name, team:(r.team||"").trim(), posScores:{}, rowIdx:0,
+          totalAB:0, wobaSum:0, wobaCount:0, obpSum:0, obpCount:0,
+          sumHR:0, sumSB:0, spotCounts:{}};
+        if(r.position){
+          const pos = r.position.trim();
+          const w = 1/(1+map[k].rowIdx);
+          map[k].posScores[pos] = (map[k].posScores[pos]||0)+w;
+        }
+        map[k].totalAB += r.at_bats||0;
+        map[k].sumHR   += r.home_runs||0;
+        map[k].sumSB   += r.stolen_bases||0;
+        const wb = parseFloat(r.woba);
+        if(!isNaN(wb)&&wb>0){ map[k].wobaSum+=wb; map[k].wobaCount++; }
+        const op = parseFloat(r.obp);
+        if(!isNaN(op)&&op>0){ map[k].obpSum+=op; map[k].obpCount++; }
+        if(r.batting_order) map[k].spotCounts[r.batting_order]=(map[k].spotCounts[r.batting_order]||0)+1;
+        map[k].rowIdx++;
+      });
+      return Object.values(map).map(r=>{
+        const topSpot = Object.entries(r.spotCounts).sort((a,b)=>b[1]-a[1])[0];
+        return {
+          player_name:  r.player_name,
+          team:         r.team,
+          position:     Object.entries(r.posScores).sort((a,b)=>b[1]-a[1]).map(e=>e[0]).join(","),
+          totalAB:      r.totalAB,
+          gamesPlayed:  r.rowIdx,
+          avgWoba:      r.wobaCount>0 ? +(r.wobaSum/r.wobaCount).toFixed(4) : null,
+          avgObp:       r.obpCount>0  ? +(r.obpSum/r.obpCount).toFixed(3)  : null,
+          sumHR:        r.sumHR,
+          sumSB:        r.sumSB,
+          typicalSpot:  topSpot ? +topSpot[0] : null,
+        };
+      });
     }
     async function fetchPlayerGames(url,key,playerName){
       const since = new Date(); since.setDate(since.getDate()-90);
@@ -191,6 +225,15 @@
       const r = await fetch(`https://statsapi.mlb.com/api/v1/people/${id}?hydrate=currentTeam`);
       const d = await r.json(); return d.people?.[0]||{};
     }
+    async function mlbFetchBattingSplits(id){
+      const r = await fetch(`https://statsapi.mlb.com/api/v1/people/${id}/stats?stats=statSplits&group=hitting&season=${SEASON}&sitCodes=vr,vl&sportId=1`);
+      const d = await r.json();
+      const splits = d.stats?.[0]?.splits||[];
+      return {
+        vsRHP: splits.find(s=>s.split?.code==='vr')?.stat?.avg||null,
+        vsLHP: splits.find(s=>s.split?.code==='vl')?.stat?.avg||null,
+      };
+    }
 
     // Score bar
     const ScoreBar = ({score,tier,size="sm"}) => {
@@ -205,15 +248,74 @@
       );
     };
 
-    const PredictionPanel = ({pred}) => {
+    const BacktestPanel = ({bt}) => {
+      if(!bt) return null;
+      const dirPct  = Math.round(bt.avgDirectionalAccuracy * 100);
+      const maePts  = Math.round(bt.avgMAE * 1000);
+      const dirColor = dirPct>=70?'#22c55e':dirPct>=60?'#f59e0b':'#ef4444';
+      const maeColor = maePts<=10?'#22c55e':maePts<=20?'#f59e0b':'#ef4444';
+      const dirLabel = dirPct>=70?'Strong':dirPct>=60?'Decent':dirPct>=50?'Weak':'Poor';
+      const maeLabel = maePts<=10?'High':maePts<=20?'Moderate':'Low';
+      const chartData = bt.recentActual.map((a,i)=>({
+        g: bt.recentStartGame+i,
+        actual:   +a.toFixed(3),
+        forecast: +Math.max(0.05,bt.recentForecast[i]).toFixed(3),
+      }));
+      return(
+        <div style={{background:"#0f172a",borderRadius:10,padding:16,marginTop:12}}>
+          <div style={{fontSize:13,fontWeight:700,color:"#94a3b8",marginBottom:10}}>Forecast Backtest</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:14}}>
+            {[
+              ["Windows",   bt.windowCount,       "#64748b",  null,     null],
+              ["Direction", dirPct+"%",            dirColor,   dirLabel, dirColor],
+              ["Avg Error", "."+String(maePts).padStart(3,"0"), maeColor, maeLabel+" accuracy", maeColor],
+            ].map(([lbl,val,vc,sub,sc])=>(
+              <div key={lbl} style={{background:"#1e293b",borderRadius:8,padding:"10px 12px"}}>
+                <div style={{fontSize:10,color:"#475569",marginBottom:4}}>{lbl}</div>
+                <div style={{fontSize:18,fontWeight:800,color:vc}}>{val}</div>
+                {sub&&<div style={{fontSize:10,color:sc,marginTop:2}}>{sub}</div>}
+              </div>
+            ))}
+          </div>
+          <div style={{fontSize:11,color:"#64748b",marginBottom:6}}>Most recent window — games {bt.recentStartGame}–{bt.recentStartGame+bt.recentActual.length-1}</div>
+          <ResponsiveContainer width="100%" height={110}>
+            <LineChart data={chartData} margin={{top:4,right:4,left:-24,bottom:0}}>
+              <XAxis dataKey="g" tick={{fontSize:10,fill:"#475569"}} tickLine={false} axisLine={false}/>
+              <YAxis tick={{fontSize:10,fill:"#475569"}} tickLine={false} axisLine={false} tickFormatter={v=>v.toFixed(2)} domain={["auto","auto"]}/>
+              <Tooltip formatter={(v,n)=>[v.toFixed(3),n==="actual"?"Actual":"Forecast"]} contentStyle={{background:"#1e293b",border:"none",fontSize:11}}/>
+              <Line type="monotone" dataKey="forecast" stroke="#3b82f6" strokeWidth={1.5} dot={false} strokeDasharray="4 2"/>
+              <Line type="monotone" dataKey="actual"   stroke="#22c55e" strokeWidth={1.5} dot={{r:2,fill:"#22c55e"}}/>
+            </LineChart>
+          </ResponsiveContainer>
+          <div style={{display:"flex",gap:14,marginTop:6,fontSize:10,color:"#475569"}}>
+            <span><span style={{color:"#3b82f6"}}>— —</span> Forecast</span>
+            <span><span style={{color:"#22c55e"}}>——</span> Actual</span>
+          </div>
+        </div>
+      );
+    };
+
+    const PredictionPanel = ({pred, hitterSplits}) => {
       if(!pred) return null;
       const color = TIER_COLOR[pred.tier];
+      const matchupNote = pred.opponents?.length
+        ? <span>vs {pred.opponents.map((opp,i)=>{
+            const f    = pred.opponentFactors?.[i];
+            const hand = pred.matchupDetails?.[i]?.pitcher?.hand;
+            const ba   = hand==='L' ? parseFloat(hitterSplits?.vsLHP)
+                       : hand==='R' ? parseFloat(hitterSplits?.vsRHP) : NaN;
+            const sf   = !isNaN(ba)&&ba>0 ? Math.max(0.85,Math.min(1.15,ba/0.255)) : null;
+            const adjF = f!=null&&sf!=null ? +(f*0.65+sf*0.35).toFixed(3) : f;
+            const c    = opp==='---' ? '#475569' : adjF==null ? '#94a3b8' : adjF>1.05 ? '#22c55e' : adjF>=0.95 ? '#f59e0b' : '#ef4444';
+            return <span key={i} style={{color:c}}>{opp}{i<pred.opponents.length-1?', ':''}</span>;
+          })}</span>
+        : "TBD";
       const rows = [
         ["Cycle phase",        pred.breakdown.phaseScore,    30, pred.phaseLabel||null],
         ["Last-5 avg trend",   pred.breakdown.trendScore,    25, null],
         ["Season OPS",         pred.breakdown.opsScore,      20, null],
         ["10-game momentum",   pred.breakdown.momentumScore, 15, null],
-        ["Matchup quality",    pred.breakdown.matchupScore,  10, pred.opponents?.length ? "vs "+pred.opponents.join(", ") : "TBD"],
+        ["Matchup quality",    pred.breakdown.matchupScore,  10, matchupNote],
       ];
       return(
         <div style={{background:"#0f172a",borderRadius:10,padding:16}}>
@@ -221,7 +323,17 @@
             <div style={{fontSize:13,fontWeight:700,color}}>3–5 Day Performance Outlook</div>
             <div style={{fontSize:26,fontWeight:800,color}}>{pred.score}<span style={{fontSize:11,color:"#64748b",fontWeight:400}}>/99</span></div>
           </div>
-          <div style={{fontSize:12,color:"#94a3b8",marginBottom:14,lineHeight:1.5}}>{pred.label}</div>
+          <div style={{fontSize:12,color:"#94a3b8",marginBottom:pred.usingFixedCycle?6:14,lineHeight:1.5}}>{pred.label}</div>
+          {pred.insufficientData&&(
+            <div style={{fontSize:11,color:"#475569",background:"#1e293b",borderRadius:6,padding:"6px 10px",marginBottom:12}}>
+              ⚠ Not enough data for cycle analysis — need at least 10 games.
+            </div>
+          )}
+          {pred.usingFixedCycle&&!pred.insufficientData&&(
+            <div style={{fontSize:11,color:"#475569",background:"#1e293b",borderRadius:6,padding:"6px 10px",marginBottom:12}}>
+              No significant cycles detected — using 28-day fixed cycle as fallback.
+            </div>
+          )}
           {rows.map(([lbl,val,max,note])=>(
             <div key={lbl} style={{marginBottom:10}}>
               <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"#64748b",marginBottom:3}}>
@@ -229,10 +341,75 @@
                 <span style={{fontWeight:600,color:"#94a3b8"}}>{val}/{max}</span>
               </div>
               <div style={{height:4,background:"#1e293b",borderRadius:4,overflow:"hidden"}}>
-                <div style={{width:`${(val/max)*100}%`,height:"100%",background:color,borderRadius:4}}/>
+                <div style={{width:`${(val/max)*100}%`,height:"100%",background:(val/max)>0.8?'#22c55e':(val/max)>=0.4?'#f59e0b':'#ef4444',borderRadius:4}}/>
               </div>
             </div>
           ))}
+          {pred.consistency!=null&&(()=>{
+            const c = pred.consistency;
+            const label = c>=70?'Reliable · low variance':c<=30?'Streaky · high variance':'Average variance';
+            const color = c>=70?'#60a5fa':c<=30?'#f59e0b':'#64748b';
+            return(
+              <div style={{marginBottom:10,paddingTop:4,borderTop:'1px solid #1e293b'}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"#64748b",marginBottom:3}}>
+                  <span>Game-to-game consistency <span style={{color:"#475569"}}>· {label}</span></span>
+                  <span style={{fontWeight:600,color}}>{c}/100</span>
+                </div>
+                <div style={{height:4,background:"#1e293b",borderRadius:4,overflow:"hidden"}}>
+                  <div style={{width:`${c}%`,height:"100%",background:color,borderRadius:4}}/>
+                </div>
+              </div>
+            );
+          })()}
+          {(()=>{
+            const details = (pred.matchupDetails||[]).filter(Boolean);
+            if(!details.length) return null;
+            const seen=new Set(), unique=[];
+            details.forEach(md=>{
+              const key=md.pitcher?md.pitcher.name:(md.team+'-TBD');
+              if(!seen.has(key)){seen.add(key);unique.push(md);}
+            });
+            return(
+              <div style={{marginTop:12,borderTop:'1px solid #1e293b',paddingTop:12}}>
+                {hitterSplits&&(hitterSplits.overall||hitterSplits.vsRHP||hitterSplits.vsLHP)&&(
+                  <div style={{display:'flex',gap:14,fontSize:11,marginBottom:10,paddingBottom:10,borderBottom:'1px solid #1e293b'}}>
+                    {hitterSplits.overall&&<span style={{color:'#64748b'}}>Overall <b style={{color:'#94a3b8'}}>{hitterSplits.overall}</b></span>}
+                    <span style={{color:'#64748b'}}>vs RHP <b style={{color:hitterSplits.vsRHP?'#94a3b8':'#475569'}}>{hitterSplits.vsRHP||'—'}</b></span>
+                    <span style={{color:'#64748b'}}>vs LHP <b style={{color:hitterSplits.vsLHP?'#94a3b8':'#475569'}}>{hitterSplits.vsLHP||'—'}</b></span>
+                  </div>
+                )}
+                {unique.map((md,i)=>(
+                  <div key={i} style={{marginBottom:10,fontSize:11}}>
+                    <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:4}}>
+                      <span style={{color:'#cbd5e1',fontWeight:700}}>{md.team}</span>
+                      <span style={{color:'#475569'}}>·</span>
+                      <span style={{color:'#e2e8f0'}}>{md.pitcher?md.pitcher.name:'TBD'}</span>
+                      {md.pitcher&&<span style={{background:'#0f172a',border:'1px solid #334155',padding:'1px 5px',borderRadius:3,fontSize:10,color:'#94a3b8'}}>{md.pitcher.hand}HP</span>}
+                    </div>
+                    {(()=>{
+                      const eraColor=era=>era==null?'#64748b':era>=4.50?'#22c55e':era>=3.50?'#f59e0b':'#ef4444';
+                      const wlStr=md.teamWinPct!=null?`${Math.round(md.teamWinPct*10)}-${10-Math.round(md.teamWinPct*10)} L10`:null;
+                      return md.pitcher?(
+                        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'3px 10px',color:'#64748b',paddingLeft:2}}>
+                          <span>ERA <b style={{color:eraColor(md.pitcher.era)}}>{md.pitcher.era!=null?md.pitcher.era.toFixed(2):'—'}</b> <span style={{color:'#334155',fontSize:10}}>(team {md.teamEra!=null?md.teamEra.toFixed(2):'—'})</span></span>
+                          <span>Rank <b style={{color:'#94a3b8'}}>{md.pitcher.eraRank?'#'+md.pitcher.eraRank+' '+md.pitcher.league:'—'}</b></span>
+                          <span>WHIP <b style={{color:'#94a3b8'}}>{md.pitcher.whip!=null?md.pitcher.whip.toFixed(2):'—'}</b></span>
+                          <span>K/9 <b style={{color:'#94a3b8'}}>{md.pitcher.k9!=null?md.pitcher.k9.toFixed(1):'—'}</b></span>
+                          <span>Med IP <b style={{color:'#94a3b8'}}>{md.pitcher.medianIP??'—'}</b></span>
+                          {wlStr&&<span>L10 <b style={{color:md.teamWinPct<0.40?'#22c55e':md.teamWinPct>0.60?'#ef4444':'#f59e0b'}}>{wlStr}</b></span>}
+                        </div>
+                      ):(
+                        <div style={{color:'#475569',paddingLeft:2,display:'flex',gap:10,flexWrap:'wrap'}}>
+                          <span>Starter TBD · team ERA <b style={{color:eraColor(md.teamEra)}}>{md.teamEra!=null?md.teamEra.toFixed(2):'—'}</b></span>
+                          {wlStr&&<span>· L10 <b style={{color:md.teamWinPct<0.40?'#22c55e':md.teamWinPct>0.60?'#ef4444':'#f59e0b'}}>{wlStr}</b></span>}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
           <div style={{marginTop:14,padding:"10px 12px",background:"#1e293b",borderRadius:8,fontSize:11,color:"#475569",lineHeight:1.6}}>
             <b style={{color:"#64748b"}}>Methodology:</b> Cycle phase position (30) + Last-5 avg (25) + Season OPS (20) + 10-game momentum (15) + Matchup quality (10). Matchup data from live Apr 27–May 1 schedule.
           </div>
@@ -247,6 +424,225 @@
     }
     function getCredential(metaName, lsKey) {
       return localStorage.getItem(lsKey) || readMeta(metaName) || "";
+    }
+
+    // ── Game Plan Tab ─────────────────────────────────────────────────────────
+    function GamePlanTab({roster, predCache, dataSource}) {
+      const [myTeam,       setMyTeam]       = React.useState(readMeta("default-team")||"");
+      const [schedule,     setSchedule]     = React.useState(null);
+      const [schedLoading, setSchedLoading] = React.useState(false);
+      const [selectedGame, setSelectedGame] = React.useState(null);
+      const [myLineup,     setMyLineup]     = React.useState(null);
+      const [oppLineup,    setOppLineup]    = React.useState(null);
+      const [aiSummary,    setAiSummary]    = React.useState("");
+      const [aiLoading,    setAiLoading]    = React.useState(false);
+
+      const teams = React.useMemo(()=>[...new Set(roster.map(p=>p.team).filter(Boolean))].sort(),[roster]);
+
+      React.useEffect(()=>{
+        if(!myTeam) return;
+        setSchedLoading(true); setSchedule(null); setSelectedGame(null); setMyLineup(null); setOppLineup(null); setAiSummary("");
+        fetchUpcomingSchedule(myTeam).then(sched=>{
+          const games = sched.opponents.map((opp,i)=>({
+            dayOffset:i,
+            date: new Date(Date.now()+i*86400000).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"}),
+            opponent: opp,
+            detail: sched.matchupDetails?.[i],
+            factor: sched.opponentFactors?.[i],
+          })).filter(g=>g.opponent&&g.opponent!=='---');
+          setSchedule({games,sched}); setSchedLoading(false);
+        }).catch(()=>setSchedLoading(false));
+      },[myTeam]);
+
+      React.useEffect(()=>{
+        if(!selectedGame||!myTeam) return;
+        const oppFull = selectedGame.detail?.teamFullName;
+        const myPool = roster.filter(p=>p.team===myTeam&&(p.gamesPlayed||0)>=5)
+          .sort((a,b)=>(predCache[b.player_name]?.score||0)-(predCache[a.player_name]?.score||0)).slice(0,14);
+        setMyLineup(buildOptimalLineup(myPool, predCache));
+        if(oppFull){
+          const oppPool = roster.filter(p=>p.team===oppFull&&(p.gamesPlayed||0)>=5)
+            .sort((a,b)=>(predCache[b.player_name]?.score||0)-(predCache[a.player_name]?.score||0)).slice(0,14);
+          setOppLineup(buildOpponentLineup(oppPool, predCache));
+        } else { setOppLineup(null); }
+      },[selectedGame, roster, predCache, myTeam]);
+
+      const generateAI = async()=>{
+        if(!myLineup||!selectedGame) return;
+        setAiLoading(true); setAiSummary("");
+        const fmtMine = myLineup.map((e,i)=>{
+          if(!e) return `${i+1}. TBD`;
+          const p=e.player, pr=predCache[p.player_name];
+          return `${i+1}. ${p.player_name} (${p.position?.split(",")[0]||"?"}) wOBA ${p.avgWoba?.toFixed(3)||"—"} Score ${pr?.score||"—"} ${pr?.tier==="hot"?"Peak":pr?.tier==="warm"?"Rising":pr?.tier==="neutral"?"Holding":"Fading"}`;
+        }).join("\n");
+        const fmtOpp = oppLineup?oppLineup.map(e=>{
+          if(!e) return "";
+          const p=e.player, pr=predCache[p.player_name];
+          return `${e.spot}. ${p.player_name} (${p.position?.split(",")[0]||"?"}) wOBA ${p.avgWoba?.toFixed(3)||"—"} Score ${pr?.score||"—"}`;
+        }).join("\n"):"Not available";
+        const sp=selectedGame.detail?.pitcher;
+        const prompt=`You are a baseball manager writing a pregame lineup brief.
+
+My Team: ${myTeam}
+Opponent: ${selectedGame.detail?.teamFullName||selectedGame.opponent} (${selectedGame.date})
+Opp SP: ${sp?`${sp.name} (${sp.hand}HP) ERA ${sp.era?.toFixed(2)||"?"} WHIP ${sp.whip?.toFixed(2)||"?"} K/9 ${sp.k9?.toFixed(1)||"?"}`:"TBD"}
+Opp Team ERA: ${selectedGame.detail?.teamEra?.toFixed(2)||"?"} · L10: ${selectedGame.detail?.teamWinPct!=null?Math.round(selectedGame.detail.teamWinPct*10)+"-"+(10-Math.round(selectedGame.detail.teamWinPct*10)):" ?"}
+
+MY LINEUP (cycle-optimized):
+${fmtMine}
+
+OPPONENT LINEUP (projected by batting history):
+${fmtOpp}
+
+Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advantage today, (2) the matchup we must exploit or neutralize, (3) one specific tactical recommendation (platoon, lineup tweak, etc.), (4) your game prediction. Use names and numbers from above — no generic baseball filler.`;
+        try{
+          const res=await fetch("/api/scout",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prompt})});
+          if(!res.ok) throw new Error(`API ${res.status}`);
+          const d=await res.json(); setAiSummary(d.text||"No summary returned.");
+        }catch(e){ setAiSummary(e.message==="Failed to fetch"?"AI requires Vercel deployment.":"Error: "+e.message); }
+        setAiLoading(false);
+      };
+
+      const wobaColor=w=>!w?'#64748b':w>=.370?'#22c55e':w>=.320?'#a3e635':w>=.280?'#f59e0b':'#ef4444';
+      const tierIcon=t=>t==="hot"?"↑":t==="warm"?"↗":t==="cold"?"↓":"→";
+
+      const LineupCard=({title,lineup,accentColor,pitcher,teamEra,teamWinPct})=>{
+        const l10wins = teamWinPct!=null?Math.round(teamWinPct*10):null;
+        const l10str  = l10wins!=null?`${l10wins}-${10-l10wins} L10`:null;
+        return(
+          <div style={{background:"#1e293b",borderRadius:12,padding:16,flex:1,minWidth:0}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,paddingBottom:8,borderBottom:`2px solid ${accentColor}`}}>
+              <span style={{fontWeight:800,fontSize:13,color:accentColor,textTransform:"uppercase",letterSpacing:1}}>{title}</span>
+              {l10str&&<span style={{fontSize:10,color:teamWinPct<0.40?'#22c55e':teamWinPct>0.60?'#ef4444':'#f59e0b'}}>{l10str}</span>}
+            </div>
+            {pitcher?(
+              <div style={{marginBottom:10,padding:"6px 8px",background:"#0f172a",borderRadius:6,fontSize:11}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <span style={{color:"#94a3b8",fontWeight:700}}>SP: {pitcher.name}</span>
+                  <span style={{background:"#334155",borderRadius:3,padding:"1px 5px",color:"#94a3b8",fontSize:10}}>{pitcher.hand}HP</span>
+                </div>
+                <div style={{display:"flex",gap:12,marginTop:4,color:"#64748b"}}>
+                  {[["ERA",pitcher.era?.toFixed(2)],["WHIP",pitcher.whip?.toFixed(2)],["K/9",pitcher.k9?.toFixed(1)],["Med IP",pitcher.medianIP]].map(([l,v])=>v!=null&&(
+                    <span key={l}>{l} <b style={{color:l==="ERA"?(pitcher.era>=4.50?'#22c55e':pitcher.era>=3.50?'#f59e0b':'#ef4444'):"#94a3b8"}}>{v}</b></span>
+                  ))}
+                </div>
+              </div>
+            ):(
+              <div style={{marginBottom:10,padding:"6px 8px",background:"#0f172a",borderRadius:6,fontSize:11,color:"#475569"}}>
+                SP: TBD · team ERA <b style={{color:teamEra>=4.50?'#22c55e':teamEra>=3.50?'#f59e0b':'#ef4444'}}>{teamEra?.toFixed(2)||"—"}</b>
+              </div>
+            )}
+            {(lineup||[]).map((entry,i)=>{
+              const spot=i+1;
+              if(!entry) return(
+                <div key={spot} style={{display:"flex",alignItems:"center",gap:6,padding:"4px 6px",marginBottom:1}}>
+                  <span style={{width:18,color:"#334155",fontSize:11,fontWeight:700}}>{spot}.</span>
+                  <span style={{color:"#334155",fontSize:12}}>TBD</span>
+                </div>
+              );
+              const {player}=entry, pred=predCache[player.player_name];
+              const sc=pred?TIER_COLOR[pred.tier]:"#64748b";
+              const diff=player.typicalSpot&&player.typicalSpot!==spot;
+              return(
+                <div key={spot} style={{display:"flex",alignItems:"center",gap:6,padding:"4px 6px",marginBottom:1,borderRadius:4,background:spot===3||spot===4?"rgba(255,255,255,0.02)":"transparent"}}>
+                  <span style={{width:18,color:"#475569",fontSize:11,fontWeight:700,flexShrink:0}}>{spot}.</span>
+                  <span style={{flex:1,fontSize:12,fontWeight:600,color:"#e2e8f0",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>
+                    {player.player_name}
+                    {diff&&<span style={{color:"#334155",fontSize:9,marginLeft:3}} title={`usually bats ${player.typicalSpot}`}>†</span>}
+                  </span>
+                  <span style={{fontSize:10,color:"#64748b",width:26,flexShrink:0}}>{player.position?.split(",")[0]||"—"}</span>
+                  <span style={{fontSize:11,fontWeight:700,color:wobaColor(player.avgWoba),width:36,flexShrink:0}}>{player.avgWoba?.toFixed(3)||"—"}</span>
+                  {pred&&<span style={{fontSize:11,fontWeight:700,color:sc,width:26,flexShrink:0,textAlign:"right"}}>{pred.score}{tierIcon(pred.tier)}</span>}
+                </div>
+              );
+            })}
+            {!lineup&&<div style={{color:"#475569",fontSize:12,padding:8,textAlign:"center"}}>Select a game to build lineup</div>}
+          </div>
+        );
+      };
+
+      return(
+        <div>
+          {/* Team + game selector */}
+          <div style={{background:"#1e293b",borderRadius:12,padding:16,marginBottom:16}}>
+            <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:12,flexWrap:"wrap"}}>
+              <span style={{fontSize:12,color:"#64748b",fontWeight:700}}>MY TEAM</span>
+              <select value={myTeam} onChange={e=>{setMyTeam(e.target.value);setSelectedGame(null);}}
+                style={{background:"#0f172a",border:"1px solid #334155",borderRadius:6,padding:"6px 10px",color:"#f1f5f9",fontSize:12,cursor:"pointer"}}>
+                <option value="">Select team…</option>
+                {teams.map(t=><option key={t} value={t}>{t}</option>)}
+              </select>
+              {schedLoading&&<span style={{fontSize:12,color:"#64748b"}}>Loading schedule…</span>}
+            </div>
+            {schedule&&schedule.games.length>0&&(
+              <div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:4}}>
+                {schedule.games.map((game,i)=>{
+                  const isSel=selectedGame===game;
+                  const fc=game.factor>1.05?'#22c55e':game.factor<0.95?'#ef4444':'#f59e0b';
+                  return(
+                    <div key={i} onClick={()=>setSelectedGame(game)} style={{
+                      flexShrink:0, padding:"8px 12px", borderRadius:8, cursor:"pointer", minWidth:110,
+                      background:isSel?"#334155":"#0f172a",
+                      border:`1px solid ${isSel?"#3b82f6":"#1e293b"}`,
+                      outline:isSel?"2px solid #3b82f640":"none",
+                    }}>
+                      <div style={{fontSize:10,color:"#64748b",marginBottom:2}}>{game.date}</div>
+                      <div style={{fontSize:13,fontWeight:700,color:"#e2e8f0"}}>vs {game.opponent}</div>
+                      {game.detail?.pitcher?(
+                        <div style={{fontSize:10,color:"#94a3b8",marginTop:2}}>{game.detail.pitcher.name.split(" ").pop()} <span style={{color:"#475569"}}>({game.detail.pitcher.hand}HP)</span></div>
+                      ):<div style={{fontSize:10,color:"#334155",marginTop:2}}>SP TBD</div>}
+                      {game.factor!=null&&<div style={{fontSize:10,color:fc,marginTop:1}}>{game.factor>1.05?"Favorable":game.factor<0.95?"Tough":"Even"}</div>}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {schedule&&schedule.games.length===0&&<div style={{color:"#475569",fontSize:12}}>No upcoming games found in the next 14 days.</div>}
+          </div>
+
+          {/* Lineups */}
+          <div style={{display:"flex",gap:12,alignItems:"flex-start",marginBottom:16,flexWrap:"wrap"}}>
+            <LineupCard
+              title={myTeam||"My Team"}
+              lineup={myLineup}
+              accentColor="#3b82f6"
+              pitcher={null}
+              teamEra={null}
+              teamWinPct={null}
+            />
+            <LineupCard
+              title={selectedGame?.detail?.teamFullName||selectedGame?.opponent||"Opponent"}
+              lineup={oppLineup}
+              accentColor="#f59e0b"
+              pitcher={selectedGame?.detail?.pitcher||null}
+              teamEra={selectedGame?.detail?.teamEra||null}
+              teamWinPct={selectedGame?.detail?.teamWinPct??null}
+            />
+          </div>
+
+          {/* Legend */}
+          {(myLineup||oppLineup)&&(
+            <div style={{fontSize:10,color:"#334155",marginBottom:12}}>
+              † player batting outside their historical spot · wOBA colors: <span style={{color:"#22c55e"}}>elite ≥.370</span> · <span style={{color:"#a3e635"}}>.320+</span> · <span style={{color:"#f59e0b"}}>.280+</span> · <span style={{color:"#ef4444"}}>&lt;.280</span>
+            </div>
+          )}
+
+          {/* AI brief */}
+          {myLineup&&selectedGame&&(
+            <div style={{background:"#1e293b",borderRadius:12,padding:16}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:aiSummary?12:0}}>
+                <span style={{fontWeight:700,fontSize:13,color:"#94a3b8"}}>Manager's Pregame Brief</span>
+                <button onClick={generateAI} disabled={aiLoading}
+                  style={{padding:"7px 16px",borderRadius:8,border:"none",cursor:aiLoading?"not-allowed":"pointer",
+                    fontWeight:700,fontSize:12,background:"#3b82f6",color:"#fff",opacity:aiLoading?0.6:1}}>
+                  {aiLoading?"Generating…":"Generate Brief"}
+                </button>
+              </div>
+              {aiSummary&&<div style={{fontSize:13,color:"#cbd5e1",lineHeight:1.7,whiteSpace:"pre-wrap"}}>{aiSummary}</div>}
+            </div>
+          )}
+        </div>
+      );
     }
 
     // ── Pitchers Tab Component ────────────────────────────────────────────────
@@ -648,7 +1044,11 @@
       const [predCache,setPredCache]   = useState({});
       const [currentPred,setCurrentPred] = useState(null);
       const [cycleAnalysis,setCycleAnalysis] = useState(null);
+      const [hitterSplits,setHitterSplits]     = useState(null);
+      const [backtestResult,setBacktestResult] = useState(null);
+      const [batchProgress,setBatchProgress] = useState(null);
       const mlbRef = useRef(null);
+      const batchRunId = useRef(0);
 
       const loadRoster = useCallback(async()=>{
         if(dataSource==="demo"){
@@ -673,23 +1073,30 @@
 
       const loadGames = useCallback(async()=>{
         if(!selectedPlayer) return;
-        setDataLoading(true); setDataError(""); setAiInsight(""); setSeasonStats(null); setCurrentPred(null); setCycleAnalysis(null);
+        setDataLoading(true); setDataError(""); setAiInsight(""); setSeasonStats(null); setCurrentPred(null); setCycleAnalysis(null); setHitterSplits(null); setBacktestResult(null);
         try{
-          let games=[], ss=null, teamName=selectedPlayer.team;
+          let games=[], ss=null, teamName=selectedPlayer.team, splitsForPred=null;
           if(dataSource==="mlb"){
             const pid = selectedPlayer.mlbId||MLB_IDS[selectedPlayer.player_name];
             if(!pid){ setDataError("No MLB ID."); setDataLoading(false); return; }
-            const[splits,ssRaw,info] = await Promise.all([mlbFetchGameLog(pid),mlbFetchSeasonStats(pid),mlbFetchInfo(pid)]);
+            const[splits,ssRaw,info,battingSplits] = await Promise.all([mlbFetchGameLog(pid),mlbFetchSeasonStats(pid),mlbFetchInfo(pid),mlbFetchBattingSplits(pid)]);
             teamName = info.currentTeam?.name||selectedPlayer.team||"";
             const transformed = transformMLBSplits(splits);
             if(transformed.length===0){ setDataError(`No ${SEASON} game log — showing demo.`); games=genDemo(selectedPlayer.player_name,1.5); }
             else games=transformed;
             ss={avg:ssRaw.avg||".---",ops:ssRaw.ops||".---",hr:ssRaw.homeRuns||0,rbi:ssRaw.rbi||0,hits:ssRaw.hits||0,ab:ssRaw.atBats||0,games:ssRaw.gamesPlayed||0,team:teamName,pos:info.primaryPosition?.abbreviation||""};
             setSeasonStats(ss);
+            splitsForPred = battingSplits;
+            setHitterSplits({overall:ssRaw.avg||null, ...battingSplits});
           }else if(dataSource==="live"&&sbUrl&&sbKey){
             const rows = await fetchPlayerGames(sbUrl,sbKey,selectedPlayer.player_name);
             games = rows.length?transformRows(rows):genDemo(selectedPlayer.player_name,1.5);
             if(!rows.length) setDataError("No rows found — showing demo.");
+            mlbSearchPlayer(selectedPlayer.player_name).then(person=>{
+              if(person) mlbFetchBattingSplits(person.id).then(battingSplits=>{
+                setHitterSplits({overall:null, ...battingSplits});
+              }).catch(()=>{});
+            }).catch(()=>{});
           }else{
             const idx = DEMO_PLAYERS.findIndex(p=>p.player_name===selectedPlayer.player_name);
             await new Promise(r=>setTimeout(r,300));
@@ -697,10 +1104,13 @@
             ss = {avg:".271",ops:".792",hr:12,rbi:38,hits:44,ab:162,games:45,team:"MLB",pos:"OF"};
             setSeasonStats(ss);
           }
-          setGameData(games);
           const analysis = analyzePlayerCycles(games);
           setCycleAnalysis(analysis);
-          const pred = computePredictionScore(selectedPlayer.player_name, teamName||selectedPlayer.team, games, ss);
+          if(analysis) games = applyPhaseColoring(games, analysis);
+          setGameData(games);
+          setBacktestResult(backtestForecast(games));
+          const schedData = await fetchUpcomingSchedule(teamName||selectedPlayer.team);
+          const pred = computePredictionScore(selectedPlayer.player_name, teamName||selectedPlayer.team, games, ss, schedData, splitsForPred);
           setCurrentPred(pred);
           setPredCache(prev=>({...prev,[selectedPlayer.player_name]:pred}));
         }catch(e){
@@ -723,6 +1133,51 @@
 
       useEffect(()=>{ loadRoster(); },[loadRoster]);
       useEffect(()=>{ loadGames(); },[loadGames]);
+
+      useEffect(()=>{
+        if(dataSource==="demo"||!roster.length) return;
+        if(dataSource==="live"&&(!sbUrl||!sbKey)) return;
+        const runId = ++batchRunId.current;
+        setPredCache({});
+        const prioritized = [...roster].sort((a,b)=>{
+          const scoreOf = p => (p.totalAB||0)*0.5 + ((p.avgWoba||0)/0.350)*0.5*200;
+          return scoreOf(b)-scoreOf(a);
+        });
+        setBatchProgress({done:0,total:prioritized.length});
+        let idx=0, done=0;
+        const CONC = dataSource==="live"?8:2;
+        const worker = async()=>{
+          while(idx<prioritized.length){
+            if(batchRunId.current!==runId) return;
+            const player = prioritized[idx++];
+            try{
+              let games=[], ss=null;
+              if(dataSource==="live"){
+                const rows = await fetchPlayerGames(sbUrl,sbKey,player.player_name);
+                if(!rows.length){ done++; setBatchProgress({done,total:prioritized.length}); continue; }
+                games = transformRows(rows);
+              }else{
+                const pid = player.mlbId||MLB_IDS[player.player_name];
+                if(!pid){ done++; setBatchProgress({done,total:prioritized.length}); continue; }
+                const[splits,ssRaw] = await Promise.all([mlbFetchGameLog(pid),mlbFetchSeasonStats(pid)]);
+                const t = transformMLBSplits(splits);
+                if(!t.length){ done++; setBatchProgress({done,total:prioritized.length}); continue; }
+                games=t;
+                ss={avg:ssRaw.avg||".---",ops:ssRaw.ops||".---",hr:ssRaw.homeRuns||0,rbi:ssRaw.rbi||0,hits:ssRaw.hits||0,ab:ssRaw.atBats||0,games:ssRaw.gamesPlayed||0,team:player.team};
+              }
+              const analysis = analyzePlayerCycles(games);
+              if(analysis) games = applyPhaseColoring(games,analysis);
+              const pred = computePredictionScore(player.player_name,player.team,games,ss);
+              if(batchRunId.current!==runId) return;
+              setPredCache(prev=>({...prev,[player.player_name]:pred}));
+            }catch(e){}
+            done++;
+            setBatchProgress({done,total:prioritized.length});
+          }
+        };
+        Promise.all(Array(CONC).fill(null).map(worker))
+          .then(()=>{ if(batchRunId.current===runId) setBatchProgress(null); });
+      },[roster,dataSource,sbUrl,sbKey]);
 
       const doMlbSearch = async()=>{
         if(!mlbQuery.trim()) return;
@@ -755,17 +1210,61 @@
 
       const teams = ["ALL",...Array.from(new Set(roster.map(p=>p.team))).sort()];
       const filteredRoster = roster
-        .filter(p=>(teamFilter==="ALL"||p.team===teamFilter)&&p.player_name.toLowerCase().includes(search.toLowerCase()))
+        .filter(p=>(teamFilter==="ALL"||(p.team||"").trim()===teamFilter.trim())&&p.player_name.toLowerCase().includes(search.toLowerCase()))
         .sort((a,b)=>{
-          if(sortBy==="prediction"){
-            return (predCache[b.player_name]?.score||50)-(predCache[a.player_name]?.score||50);
-          }
+          if(sortBy==="prediction"||sortBy==="positions")
+            return (predCache[b.player_name]?.score||0)-(predCache[a.player_name]?.score||0);
+          if(sortBy==="consistency")
+            return (predCache[b.player_name]?.consistency??-1)-(predCache[a.player_name]?.consistency??-1);
           return a.player_name.localeCompare(b.player_name);
         });
 
       const grouped = sortBy==="prediction"
         ? {"rankings":filteredRoster}
-        : filteredRoster.reduce((acc,p)=>{ (acc[p.team]=acc[p.team]||[]).push(p); return acc; },{});
+        : sortBy==="positions"
+          ? filteredRoster.reduce((acc,p)=>{ const pos=p.position?p.position.split(",")[0].trim()||"—":"—"; (acc[pos]=acc[pos]||[]).push(p); return acc; },{})
+          : sortBy==="consistency"
+            ? filteredRoster.reduce((acc,p)=>{ const c=predCache[p.player_name]?.consistency; const bucket=c==null?"Unscored":c>=70?"Reliable":c<=30?"Streaky":"Average"; (acc[bucket]=acc[bucket]||[]).push(p); return acc; },{})
+            : filteredRoster.reduce((acc,p)=>{ (acc[p.team]=acc[p.team]||[]).push(p); return acc; },{});
+
+      const posGroupOrder = sortBy==="positions"
+        ? Object.keys(grouped).sort((a,b)=>{
+            const avg=g=>{ const ps=grouped[g].map(p=>predCache[p.player_name]?.score).filter(Boolean); return ps.length?ps.reduce((s,v)=>s+v,0)/ps.length:0; };
+            return avg(b)-avg(a);
+          })
+        : [];
+
+      const teamScores = React.useMemo(()=>{
+        const t={};
+        roster.forEach(p=>{
+          const pred=predCache[p.player_name];
+          if(!t[p.team]) t[p.team]={sum:0,count:0,total:roster.filter(x=>x.team===p.team).length};
+          if(pred){ t[p.team].sum+=pred.score; t[p.team].count++; }
+        });
+        return Object.entries(t)
+          .filter(([,v])=>v.count>0)
+          .map(([team,v])=>({team,avg:Math.round(v.sum/v.count),sum:v.sum,count:v.count,total:v.total}))
+          .sort((a,b)=>b.avg-a.avg);
+      },[predCache,roster]);
+
+      const positionScores = React.useMemo(()=>{
+        const t={};
+        roster.forEach(p=>{
+          const pred=predCache[p.player_name];
+          const pos=p.position?p.position.split(",")[0].trim()||"—":"—";
+          if(!t[pos]) t[pos]={sum:0,count:0,total:0};
+          t[pos].total++;
+          if(pred){ t[pos].sum+=pred.score; t[pos].count++; }
+        });
+        const POS_ORDER=["C","1B","2B","3B","SS","LF","CF","RF","OF","DH","—"];
+        return Object.entries(t)
+          .filter(([,v])=>v.count>0)
+          .map(([pos,v])=>({pos,avg:Math.round(v.sum/v.count),count:v.count,total:v.total}))
+          .sort((a,b)=>{
+            const ai=POS_ORDER.indexOf(a.pos), bi=POS_ORDER.indexOf(b.pos);
+            return (ai===-1?99:ai)-(bi===-1?99:bi);
+          });
+      },[predCache,roster]);
 
       const fetchInsight = async()=>{
         setAiLoading(true);
@@ -849,7 +1348,7 @@ Based specifically on the detected cycle periods and forecast direction above �
 
             {/* ── Main tab bar: Hitters / Pitchers ── */}
             <div style={{display:"flex",gap:4,marginBottom:16,borderBottom:"1px solid #334155",paddingBottom:0}}>
-              {[["hitters","🏏 Hitters"],["pitchers","⚾ Pitchers"]].map(([tab,label])=>(
+              {[["hitters","🏏 Hitters"],["pitchers","⚾ Pitchers"],["gameplan","📋 Game Plan"]].map(([tab,label])=>(
                 <button key={tab} onClick={()=>setMainTab(tab)}
                   style={{padding:"9px 20px",borderRadius:"8px 8px 0 0",border:"none",cursor:"pointer",fontWeight:700,fontSize:13,
                     background:mainTab===tab?"#1e293b":"transparent",
@@ -860,6 +1359,11 @@ Based specifically on the detected cycle periods and forecast direction above �
                 </button>
               ))}
             </div>
+
+            {/* ── GAME PLAN TAB ── */}
+            {mainTab === "gameplan" && (
+              <GamePlanTab roster={roster} predCache={predCache} dataSource={dataSource}/>
+            )}
 
             {/* ── PITCHERS TAB ── */}
             {mainTab === "pitchers" && (
@@ -879,45 +1383,111 @@ Based specifically on the detected cycle periods and forecast direction above �
               <div style={{...s.card,padding:12}}>
                 <div style={{fontSize:12,fontWeight:700,color:"#94a3b8",marginBottom:10}}>PLAYERS</div>
                 <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Search…" style={{...s.input,marginBottom:8}}/>
-                <div style={{display:"flex",gap:6,marginBottom:8}}>
+                <div style={{display:"flex",gap:6,marginBottom:6}}>
                   <button onClick={()=>setSortBy("name")} style={{...s.btn(sortBy==="name"),flex:1,padding:"5px 8px",fontSize:11}}>A–Z</button>
-                  <button onClick={()=>setSortBy("prediction")} style={{...s.btn(sortBy==="prediction","#f59e0b"),flex:1,padding:"5px 8px",fontSize:11}}>🔮 Predicted</button>
+                  <button onClick={()=>setSortBy("prediction")} style={{...s.btn(sortBy==="prediction","#f59e0b"),flex:1,padding:"5px 8px",fontSize:11}}>🔮 Ranked</button>
                 </div>
-                {dataSource!=="mlb"&&sortBy==="name"&&(
+                <div style={{display:"flex",gap:6,marginBottom:6}}>
+                  <button onClick={()=>setSortBy("teams")} style={{...s.btn(sortBy==="teams","#22c55e"),flex:1,padding:"5px 8px",fontSize:11}}>🏆 Teams</button>
+                  <button onClick={()=>setSortBy("positions")} style={{...s.btn(sortBy==="positions","#a78bfa"),flex:1,padding:"5px 8px",fontSize:11}}>📍 Positions</button>
+                </div>
+                <div style={{marginBottom:8}}>
+                  <button onClick={()=>setSortBy("consistency")} style={{...s.btn(sortBy==="consistency","#60a5fa"),width:"100%",padding:"5px 8px",fontSize:11}}>= Consistency</button>
+                </div>
+                {batchProgress&&(
+                  <div style={{marginBottom:8}}>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:"#64748b",marginBottom:3}}>
+                      <span>Scoring players…</span><span>{batchProgress.done}/{batchProgress.total}</span>
+                    </div>
+                    <div style={{background:"#1e293b",borderRadius:4,height:3}}>
+                      <div style={{background:"#3b82f6",height:3,borderRadius:4,width:`${Math.round(batchProgress.done/batchProgress.total*100)}%`,transition:"width 0.3s"}}/>
+                    </div>
+                  </div>
+                )}
+                {dataSource!=="mlb"&&(sortBy==="name"||sortBy==="prediction"||sortBy==="positions"||sortBy==="consistency")&&(
                   <select value={teamFilter} onChange={e=>setTeamFilter(e.target.value)} style={{...s.input,marginBottom:8,cursor:"pointer"}}>
                     {teams.map(t=><option key={t} value={t}>{t==="ALL"?"All Teams":t}</option>)}
                   </select>
                 )}
                 <div style={{maxHeight:520,overflowY:"auto",fontSize:12}}>
-                  {Object.keys(grouped).sort().map(groupKey=>(
-                    <div key={groupKey}>
-                      {sortBy==="prediction"&&(
-                        <div style={{fontSize:10,fontWeight:800,color:"#f59e0b",textTransform:"uppercase",letterSpacing:1,padding:"4px 6px",marginBottom:4}}>🔮 3–5 Day Rankings</div>
-                      )}
-                      {sortBy==="name"&&dataSource!=="mlb"&&(
-                        <div style={{fontSize:10,fontWeight:800,color:"#475569",textTransform:"uppercase",letterSpacing:1,padding:"4px 6px",marginBottom:2}}>{groupKey}</div>
-                      )}
-                      {grouped[groupKey].map((p,rank)=>{
-                        const pred = predCache[p.player_name];
-                        const isSel = selectedPlayer?.player_name===p.player_name;
-                        return(
-                          <div key={p.player_name} onClick={()=>setSelectedPlayer(p)}
-                            style={{padding:"8px 10px",borderRadius:6,cursor:"pointer",marginBottom:3,
-                              background:isSel?"#3b82f6":"transparent"}}>
-                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:pred?3:0}}>
-                              <span style={{color:isSel?"#fff":"#cbd5e1",fontWeight:isSel?700:400,fontSize:12}}>
-                                {sortBy==="prediction"&&<span style={{color:isSel?"rgba(255,255,255,0.6)":"#475569",marginRight:5,fontSize:10}}>#{rank+1}</span>}
-                                {p.player_name}
-                              </span>
-                              {pred&&<span style={{fontSize:11,fontWeight:700,color:isSel?"#fff":TIER_COLOR[pred.tier]}}>{pred.score}</span>}
-                            </div>
-                            {pred&&!isSel&&<ScoreBar score={pred.score} tier={pred.tier}/>}
+                  {sortBy==="teams"?(
+                    teamScores.length===0?(
+                      <div style={{color:"#475569",fontStyle:"italic",padding:8}}>Scores loading…</div>
+                    ):teamScores.map((t,i)=>{
+                      const color = t.avg>=75?"#22c55e":t.avg>=50?"#f59e0b":"#ef4444";
+                      return(
+                        <div key={t.team} onClick={()=>{setTeamFilter(t.team);setSortBy("prediction");}}
+                          style={{padding:"8px 10px",borderRadius:6,cursor:"pointer",marginBottom:4,background:"#0f172a"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                            <span style={{color:"#cbd5e1",fontWeight:600}}>
+                              <span style={{color:"#475569",marginRight:5,fontSize:10}}>#{i+1}</span>{t.team}
+                            </span>
+                            <span style={{fontSize:13,fontWeight:800,color}}>{t.avg}</span>
                           </div>
-                        );
-                      })}
-                    </div>
-                  ))}
-                  {Object.keys(grouped).length===0&&(
+                          <div style={{background:"#1e293b",borderRadius:3,height:5,marginBottom:4}}>
+                            <div style={{background:color,height:5,borderRadius:3,width:`${t.avg}%`,transition:"width 0.4s"}}/>
+                          </div>
+                          <div style={{fontSize:10,color:"#475569"}}>{t.count}/{t.total} players scored · avg outlook</div>
+                        </div>
+                      );
+                    })
+                  ):(
+                    (sortBy==="positions"?posGroupOrder:sortBy==="consistency"?["Reliable","Average","Streaky","Unscored"].filter(k=>grouped[k]):Object.keys(grouped).sort()).map(groupKey=>(
+                      <div key={groupKey}>
+                        {sortBy==="prediction"&&(
+                          <div style={{fontSize:10,fontWeight:800,color:"#f59e0b",textTransform:"uppercase",letterSpacing:1,padding:"4px 6px",marginBottom:4}}>🔮 3–5 Day Rankings</div>
+                        )}
+                        {sortBy==="name"&&dataSource!=="mlb"&&(
+                          <div style={{fontSize:10,fontWeight:800,color:"#475569",textTransform:"uppercase",letterSpacing:1,padding:"4px 6px",marginBottom:2}}>{groupKey}</div>
+                        )}
+                        {sortBy==="consistency"&&(()=>{
+                          const hdr={Reliable:{color:"#60a5fa",desc:"low variance · reliable output"},Average:{color:"#64748b",desc:"average variance"},Streaky:{color:"#f59e0b",desc:"high variance · hot/cold swings"},Unscored:{color:"#334155",desc:"not yet scored"}};
+                          const h=hdr[groupKey]||hdr.Unscored;
+                          return <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 6px 3px",marginTop:4}}>
+                            <span style={{fontSize:11,fontWeight:800,color:h.color,textTransform:"uppercase",letterSpacing:1}}>{groupKey}</span>
+                            <span style={{fontSize:9,color:"#475569"}}>{h.desc}</span>
+                          </div>;
+                        })()}
+                        {sortBy==="positions"&&(()=>{
+                          const ps=grouped[groupKey].map(p=>predCache[p.player_name]?.score).filter(Boolean);
+                          const avg=ps.length?Math.round(ps.reduce((s,v)=>s+v,0)/ps.length):null;
+                          const color=avg>=75?"#22c55e":avg>=50?"#f59e0b":"#ef4444";
+                          return(
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 6px 3px",marginTop:4}}>
+                              <span style={{fontSize:11,fontWeight:800,color:"#a78bfa",textTransform:"uppercase",letterSpacing:1}}>{groupKey}</span>
+                              {avg&&<span style={{fontSize:11,fontWeight:700,color}}>{avg} avg</span>}
+                            </div>
+                          );
+                        })()}
+                        {grouped[groupKey].map((p,rank)=>{
+                          const pred = predCache[p.player_name];
+                          const isSel = selectedPlayer?.player_name===p.player_name;
+                          const teamNick = p.team?p.team.split(" ").pop():"";
+                          return(
+                            <div key={p.player_name} onClick={()=>setSelectedPlayer(p)}
+                              style={{padding:"8px 10px",borderRadius:6,cursor:"pointer",marginBottom:3,
+                                background:isSel?"#3b82f6":"transparent"}}>
+                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:pred?3:0}}>
+                                <span style={{color:isSel?"#fff":"#cbd5e1",fontWeight:isSel?700:400,fontSize:12}}>
+                                  {(sortBy==="prediction"||sortBy==="positions")&&<span style={{color:isSel?"rgba(255,255,255,0.6)":"#475569",marginRight:5,fontSize:10}}>#{rank+1}</span>}
+                                  {p.player_name}
+                                  {(sortBy==="prediction"||sortBy==="positions")&&teamNick&&<span style={{color:isSel?"rgba(255,255,255,0.55)":"#475569",fontWeight:400,marginLeft:5,fontSize:10}}>{teamNick}</span>}
+                                  {p.position&&<span style={{color:isSel?"rgba(255,255,255,0.55)":"#475569",fontWeight:400,marginLeft:4,fontSize:10}}>{p.position}</span>}
+                                </span>
+                                {pred&&<span style={{display:"flex",alignItems:"center",gap:3}}>
+                                  <span style={{fontSize:11,fontWeight:700,color:isSel?"#fff":TIER_COLOR[pred.tier]}}>{pred.score}</span>
+                                  {!isSel&&pred.consistency>=70&&<span style={{fontSize:9,color:"#60a5fa",fontWeight:700,letterSpacing:0.3}}>flat</span>}
+                                  {!isSel&&pred.consistency<=30&&<span style={{fontSize:9,color:"#f59e0b",fontWeight:700,letterSpacing:0.3}}>≋</span>}
+                                </span>}
+                              </div>
+                              {pred&&!isSel&&<ScoreBar score={pred.score} tier={pred.tier}/>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ))
+                  )}
+                  {sortBy!=="teams"&&sortBy!=="positions"&&sortBy!=="consistency"&&Object.keys(grouped).length===0&&(
                     <div style={{color:"#475569",fontStyle:"italic",padding:8}}>{dataSource==="mlb"?"Search a player above.":"No players match."}</div>
                   )}
                 </div>
@@ -968,11 +1538,17 @@ Based specifically on the detected cycle periods and forecast direction above �
                     </div>
 
                     {/* Timeline */}
-                    {view==="timeline"&&(
+                    {view==="timeline"&&(()=>{
+                      const tlData = gameData.slice(-60);
+                      const hasWoba = tlData.some(g=>g.woba!=null&&g.woba>0);
+                      return (
                       <div style={{...s.card,padding:"20px 12px 12px"}}>
                         <ResponsiveContainer width="100%" height={220}>
-                          <AreaChart data={gameData.slice(-60)} margin={{left:-10,right:10}}>
-                            <defs><linearGradient id="ag" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/><stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/></linearGradient></defs>
+                          <AreaChart data={tlData} margin={{left:-10,right:10}}>
+                            <defs>
+                              <linearGradient id="ag" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/><stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/></linearGradient>
+                              <linearGradient id="wg" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#f59e0b" stopOpacity={0.2}/><stop offset="95%" stopColor="#f59e0b" stopOpacity={0}/></linearGradient>
+                            </defs>
                             <CartesianGrid strokeDasharray="3 3" stroke="#334155"/>
                             <XAxis dataKey="date" tick={{fontSize:10,fill:"#64748b"}} interval={Math.max(1,Math.floor(gameData.length/8))}/>
                             <YAxis domain={[0.100,0.500]} tick={{fontSize:10,fill:"#64748b"}}/>
@@ -980,6 +1556,7 @@ Based specifically on the detected cycle periods and forecast direction above �
                             <ReferenceLine y={0.260} stroke="#64748b" strokeDasharray="4 4" label={{value:".260",fontSize:9,fill:"#64748b"}}/>
                             <Area type="monotone" dataKey="avg" stroke="#3b82f6" strokeWidth={2} fill="url(#ag)"
                               dot={({cx,cy,payload})=><circle key={payload.date+payload.cycleDay} cx={cx} cy={cy} r={3} fill={payload.phaseColor} stroke="none"/>}/>
+                            {hasWoba&&<Area type="monotone" dataKey="woba" stroke="#f59e0b" strokeWidth={2} fill="url(#wg)" dot={false}/>}
                           </AreaChart>
                         </ResponsiveContainer>
                         <div style={{display:"flex",gap:12,justifyContent:"center",marginTop:10,flexWrap:"wrap"}}>
@@ -988,16 +1565,20 @@ Based specifically on the detected cycle periods and forecast direction above �
                               <div style={{width:8,height:8,borderRadius:"50%",background:p.color}}/><span style={{color:"#94a3b8"}}>{p.name}</span>
                             </div>
                           ))}
+                          {hasWoba&&<div style={{display:"flex",alignItems:"center",gap:5,fontSize:11}}><div style={{width:18,height:2,background:"#f59e0b",borderRadius:1}}/><span style={{color:"#94a3b8"}}>wOBA</span></div>}
+                          <div style={{display:"flex",alignItems:"center",gap:5,fontSize:11}}><div style={{width:18,height:2,background:"#3b82f6",borderRadius:1}}/><span style={{color:"#94a3b8"}}>AVG</span></div>
                         </div>
                       </div>
-                    )}
+                      );
+                    })()}
 
                     {/* Cycle */}
                     {view==="cycle"&&(()=>{
                       const merged = buildCycleChartData(gameData, cycleAnalysis);
                       const yVals = merged.map(p=>p.actual||p.fitted||p.forecast).filter(Boolean);
-                      const yMin  = Math.max(0.050, +(Math.min(...yVals)-0.030).toFixed(3));
-                      const yMax  = Math.min(0.600, +(Math.max(...yVals)+0.030).toFixed(3));
+                      const yMin  = Math.max(0, +(Math.min(...yVals)-0.030).toFixed(3));
+                      const yMax  = +(Math.max(...yVals)+0.030).toFixed(3);
+                      const sigLabel = gameData[0]?.woba!=null?'wOBA':gameData[0]?.signal>0.5?'OPS':'AVG';
                       return(
                       <div style={{...s.card,padding:"20px 12px 12px"}}>
                         {!cycleAnalysis ? (
@@ -1034,7 +1615,7 @@ Based specifically on the detected cycle periods and forecast direction above �
                                       <div style={{color:"#94a3b8",marginBottom:3}}>{label}{isFc?" (forecast)":""}</div>
                                       {vals.map(p=>(
                                         <div key={p.dataKey} style={{color:p.color}}>
-                                          {p.dataKey==="actual"?"Actual":p.dataKey==="fitted"?"FFT fit":"Forecast"}: <b>{(+p.value).toFixed(3)}</b>
+                                          {p.dataKey==="actual"?`Actual (${sigLabel})`:p.dataKey==="fitted"?"FFT fit":"Forecast"}: <b>{(+p.value).toFixed(3)}</b>
                                         </div>
                                       ))}
                                     </div>
@@ -1047,7 +1628,7 @@ Based specifically on the detected cycle periods and forecast direction above �
                               </AreaChart>
                             </ResponsiveContainer>
                             <div style={{display:"flex",gap:16,justifyContent:"center",marginTop:10,flexWrap:"wrap"}}>
-                              {[["#3b82f6","Actual avg"],["#22c55e","FFT reconstruction"],["#f59e0b","14-day forecast"]].map(([c,l])=>(
+                              {[["#3b82f6",`Actual ${sigLabel}`],["#22c55e","FFT reconstruction"],["#f59e0b","14-day forecast"]].map(([c,l])=>(
                                 <div key={l} style={{display:"flex",alignItems:"center",gap:5,fontSize:11}}>
                                   <div style={{width:24,height:2,background:c,borderRadius:1}}/><span style={{color:"#94a3b8"}}>{l}</span>
                                 </div>
@@ -1140,8 +1721,9 @@ Based specifically on the detected cycle periods and forecast direction above �
                     {view==="predict"&&(
                       <div style={{...s.card}}>
                         {currentPred
-                          ?<PredictionPanel pred={currentPred}/>
+                          ?<PredictionPanel pred={currentPred} hitterSplits={hitterSplits}/>
                           :<div style={{color:"#64748b",padding:20,textAlign:"center"}}>Load player data to generate prediction.</div>}
+                        <BacktestPanel bt={backtestResult}/>
                       </div>
                     )}
 
