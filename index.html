@@ -426,6 +426,258 @@
       return localStorage.getItem(lsKey) || readMeta(metaName) || "";
     }
 
+    // ── Backtest game row (needs its own component so useState is legal) ──────
+    function BtGameRow({g, idx, wobaColor}) {
+      const [expanded, setExpanded] = React.useState(false);
+      const actP = g.actual;
+      const oppP = g.oppPred;
+
+      // Run error color helper
+      const runErrCol = err => err<=1?"#22c55e":err<=2?"#f59e0b":"#ef4444";
+
+      // Our team: predicted vs actual
+      const ourPredRuns  = actP?.predictedRuns ?? "—";
+      const ourActRuns   = g.actualRuns;
+      const ourRunErr    = actP?.runError ?? null;
+      const ourPredWoba  = actP?.predictedWoba ?? null;
+      const ourActWoba   = g.actualWoba;
+      const ourWinProb   = actP ? Math.round(actP.winProb*100) : null;
+      const correct      = actP ? actP.predictedWin===g.actualWin : null;
+
+      // Opponent: predicted runs (from win-prob model) vs actual
+      const oppPredRuns  = oppP?.predictedRuns ?? "—";
+      const oppActRuns   = g.oppRuns;
+      const oppRunErr    = oppP?.runError ?? null;
+      const oppActWoba   = g.oppActualWoba ?? null;
+
+      const winProbCol = ourWinProb!=null?(ourWinProb>=55?"#22c55e":ourWinProb>=45?"#f59e0b":"#ef4444"):"#475569";
+
+      return(
+        <div style={{marginBottom:3,borderRadius:6,overflow:"hidden",border:"1px solid #0f172a"}}>
+          {/* Collapsed row */}
+          <div onClick={()=>setExpanded(e=>!e)}
+            style={{display:"grid",gridTemplateColumns:"82px 68px 1fr 1fr 1fr 20px",
+              alignItems:"center",gap:0,padding:"7px 10px",
+              background:idx%2===0?"#0f172a":"#111827",cursor:"pointer"}}>
+
+            {/* Date + opponent */}
+            <span style={{color:"#64748b",fontSize:11}}>{g.date}</span>
+            <span style={{color:"#e2e8f0",fontWeight:700,fontSize:12}}>{g.isHome?"vs":"@"} {g.opponent}</span>
+
+            {/* SP */}
+            <span style={{color:"#475569",fontSize:10,paddingRight:6}}>
+              {g.sp?`${g.sp.name.split(" ").pop()} ${g.sp.era?.toFixed(2)||"?"}ERA`:`${g.oppEra}ERA`}
+            </span>
+
+            {/* Our team column: pred → actual */}
+            <div style={{display:"flex",flexDirection:"column",gap:1,paddingRight:8,borderRight:"1px solid #1e293b"}}>
+              <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                <span style={{fontSize:9,color:"#475569",width:30}}>Pred</span>
+                <span style={{color:actP?runErrCol(ourRunErr):"#475569",fontWeight:700,fontSize:11}}>{ourPredRuns}R</span>
+                {ourWinProb!=null&&<span style={{color:winProbCol,fontSize:10}}>{ourWinProb}%</span>}
+                {actP&&<span style={{color:actP.predictedWin?"#22c55e":"#ef4444",fontWeight:700,fontSize:11}}>{actP.predictedWin?"W":"L"}</span>}
+                {ourPredWoba&&<span style={{color:wobaColor(ourPredWoba),fontSize:9}}>wOBA {ourPredWoba.toFixed(3)}</span>}
+              </div>
+              <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                <span style={{fontSize:9,color:"#475569",width:30}}>Act</span>
+                <span style={{color:"#e2e8f0",fontWeight:700,fontSize:11}}>{ourActRuns}R</span>
+                <span style={{fontWeight:800,fontSize:11,color:g.actualWin?"#22c55e":"#ef4444"}}>{g.actualWin?"W":"L"}</span>
+                {ourActWoba&&<span style={{color:wobaColor(ourActWoba),fontSize:9}}>wOBA {ourActWoba.toFixed(3)}</span>}
+                {correct!=null&&<span style={{fontSize:12,marginLeft:2}}>{correct?"✓":"✗"}</span>}
+              </div>
+            </div>
+
+            {/* Opponent column: pred → actual */}
+            <div style={{display:"flex",flexDirection:"column",gap:1,paddingLeft:8}}>
+              <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                <span style={{fontSize:9,color:"#475569",width:30}}>Pred</span>
+                <span style={{color:oppP?runErrCol(oppRunErr):"#475569",fontWeight:700,fontSize:11}}>{oppPredRuns}R</span>
+              </div>
+              <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                <span style={{fontSize:9,color:"#475569",width:30}}>Act</span>
+                <span style={{color:"#e2e8f0",fontWeight:700,fontSize:11}}>{oppActRuns}R</span>
+                {oppActWoba&&<span style={{color:wobaColor(oppActWoba),fontSize:9}}>wOBA {oppActWoba.toFixed(3)}</span>}
+              </div>
+            </div>
+
+            <span style={{color:"#334155",fontSize:11,textAlign:"right"}}>{expanded?"▲":"▼"}</span>
+          </div>
+
+          {/* Expanded: actual lineup */}
+          {expanded&&(
+            <div style={{background:"#0a1628",padding:"10px 12px"}}>
+              <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",marginBottom:6,textTransform:"uppercase",letterSpacing:0.8}}>Actual Lineup</div>
+              {(g.actualLineup||[]).length===0
+                ?<div style={{color:"#334155",fontSize:11}}>Box score data unavailable</div>
+                :(g.actualLineup||[]).map((p,j)=>(
+                  <div key={j} style={{display:"flex",alignItems:"center",gap:6,padding:"2px 0"}}>
+                    <span style={{width:16,color:"#334155",fontSize:10,fontWeight:700}}>{p.spot}.</span>
+                    <span style={{flex:1,fontSize:11,color:"#cbd5e1",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{p.name}</span>
+                    <span style={{fontSize:10,color:"#475569",width:22}}>{p.position||"—"}</span>
+                    <span style={{fontSize:10,fontWeight:700,color:wobaColor(p.avgWoba),width:34,textAlign:"right"}}>{p.avgWoba?.toFixed(3)||"—"}</span>
+                  </div>
+                ))
+              }
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ── Prediction Accuracy Tab ───────────────────────────────────────────────
+    function PredictionAccuracyTab({roster, predCache, sbUrl, sbKey}) {
+      const [results,    setResults]    = React.useState([]);
+      const [running,    setRunning]    = React.useState(false);
+      const [progress,   setProgress]   = React.useState("");
+      const [done,       setDone]       = React.useState(false);
+      const [cacheDate,  setCacheDate]  = React.useState(null);
+      const [fromCache,  setFromCache]  = React.useState(false);
+
+      const teams = React.useMemo(()=>[...new Set(roster.map(p=>p.team).filter(Boolean))].sort(),[roster]);
+
+      // Load from backtest_results cache on mount if Supabase is available
+      React.useEffect(()=>{
+        if(!sbUrl||!sbKey) return;
+        (async()=>{
+          try{
+            // Get the most recent run_date
+            const rows = await sbFetch(sbUrl, sbKey,
+              `backtest_results?select=team,run_date,games_eval,win_accuracy,avg_run_mae,avg_woba_mae&order=win_accuracy.desc.nullslast&limit=200`);
+            if(!rows||!rows.length) return;
+            // Group by most recent run_date
+            const latest = rows.reduce((max,r)=>r.run_date>max?r.run_date:max, rows[0].run_date);
+            const filtered = rows.filter(r=>r.run_date===latest);
+            setResults(filtered.map(r=>({
+              team:        r.team,
+              winAccuracy: r.win_accuracy,
+              avgRunMAE:   r.avg_run_mae,
+              avgWobaMAE:  r.avg_woba_mae,
+              gamesEval:   r.games_eval,
+              error:       null,
+            })).sort((a,b)=>(b.winAccuracy??-1)-(a.winAccuracy??-1)));
+            setCacheDate(latest);
+            setFromCache(true);
+            setDone(true);
+          }catch(e){ /* silent — fall back to live */ }
+        })();
+      },[sbUrl,sbKey]);
+
+      // Live computation fallback (hits MLB API per team)
+      const runAll = async () => {
+        setRunning(true); setDone(false); setResults([]); setProgress(""); setFromCache(false); setCacheDate(null);
+        const out = [];
+        for(let i=0; i<teams.length; i++){
+          const t = teams[i];
+          setProgress(`Running ${t}… (${i+1}/${teams.length})`);
+          try{
+            const r = await backtestGamePlan(t, roster, predCache, null, null, 21);
+            if(r.error){
+              out.push({team:t, error:r.error, winAccuracy:null, avgRunMAE:null, gamesEval:0});
+            } else {
+              const s = r.actualSummary || r.suggestedSummary;
+              out.push({team:t, winAccuracy:s?.winAccuracy??null, avgRunMAE:s?.avgRunMAE??null,
+                         avgWobaMAE:s?.avgWobaMAE??null, gamesEval:r.gamesEval, error:null});
+            }
+          } catch(e){
+            out.push({team:t, error:e.message, winAccuracy:null, avgRunMAE:null, gamesEval:0});
+          }
+          setResults([...out].sort((a,b)=>(b.winAccuracy??-1)-(a.winAccuracy??-1)));
+        }
+        setRunning(false); setDone(true); setProgress("");
+      };
+
+      const scoreCol = v => v==null?"#475569":v>=0.60?"#22c55e":v>=0.50?"#f59e0b":"#ef4444";
+      const maeCol   = v => v==null?"#475569":v<=1.5?"#22c55e":v<=2.5?"#f59e0b":"#ef4444";
+      const medal    = i => i===0?"🥇":i===1?"🥈":i===2?"🥉":null;
+
+      return(
+        <div>
+          <div style={{background:"#1e293b",borderRadius:12,padding:16,marginBottom:16}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
+              <div>
+                <span style={{fontWeight:700,fontSize:14,color:"#f1f5f9"}}>Prediction Accuracy — All Teams</span>
+                <div style={{fontSize:11,color:"#475569",marginTop:2}}>
+                  {fromCache&&cacheDate
+                    ? <><span style={{color:"#22c55e"}}>● Cached</span> · nightly run from {cacheDate} · <span style={{color:"#475569",cursor:"pointer",textDecoration:"underline"}} onClick={runAll}>recompute live</span></>
+                    : "Backtests every team over the last 3 weeks · ranked by W/L accuracy"
+                  }
+                </div>
+              </div>
+              <button onClick={runAll} disabled={running}
+                style={{padding:"8px 20px",borderRadius:8,border:"none",cursor:running?"not-allowed":"pointer",
+                  fontWeight:700,fontSize:13,background:"#7c3aed",color:"#fff",opacity:running?0.6:1,whiteSpace:"nowrap"}}>
+                {running?"Running…":fromCache?"Recompute Live":"Run All Teams"}
+              </button>
+            </div>
+            {progress&&<div style={{marginTop:10,fontSize:12,color:"#7c3aed"}}>{progress}</div>}
+          </div>
+
+          {results.length>0&&(
+            <div style={{background:"#1e293b",borderRadius:12,overflow:"hidden"}}>
+              <div style={{display:"grid",gridTemplateColumns:"28px 1fr 90px 90px 80px 60px",
+                gap:0,padding:"8px 16px",borderBottom:"1px solid #0f172a",
+                fontSize:10,fontWeight:700,color:"#475569",textTransform:"uppercase",letterSpacing:0.8}}>
+                <span/><span>Team</span>
+                <span style={{textAlign:"center"}}>W/L Accuracy</span>
+                <span style={{textAlign:"center"}}>Run MAE</span>
+                <span style={{textAlign:"center"}}>wOBA MAE</span>
+                <span style={{textAlign:"center"}}>Games</span>
+              </div>
+
+              {results.map((r,i)=>(
+                <div key={r.team} style={{
+                  display:"grid",gridTemplateColumns:"28px 1fr 90px 90px 80px 60px",
+                  gap:0,padding:"10px 16px",borderBottom:"1px solid #0f172a",
+                  background:i===0?"rgba(34,197,94,0.05)":i%2===0?"rgba(15,23,42,0.4)":"transparent",
+                  alignItems:"center"}}>
+                  <span style={{fontSize:14}}>{medal(i)||<span style={{fontSize:11,color:"#334155"}}>{i+1}</span>}</span>
+                  <span style={{fontWeight:700,fontSize:13,color:r.error?"#ef4444":"#e2e8f0"}}>
+                    {r.team}{r.error&&<span style={{fontSize:10,color:"#475569",marginLeft:6}}>— {r.error}</span>}
+                  </span>
+                  <div style={{textAlign:"center"}}>
+                    {r.winAccuracy!=null
+                      ?<><div style={{fontSize:18,fontWeight:800,color:scoreCol(r.winAccuracy)}}>{Math.round(r.winAccuracy*100)}%</div>
+                         <div style={{fontSize:9,color:"#334155"}}>win/loss</div></>
+                      :<span style={{color:"#334155"}}>—</span>}
+                  </div>
+                  <div style={{textAlign:"center"}}>
+                    {r.avgRunMAE!=null
+                      ?<><div style={{fontSize:18,fontWeight:800,color:maeCol(r.avgRunMAE)}}>{r.avgRunMAE}</div>
+                         <div style={{fontSize:9,color:"#334155"}}>runs off</div></>
+                      :<span style={{color:"#334155"}}>—</span>}
+                  </div>
+                  <div style={{textAlign:"center"}}>
+                    {r.avgWobaMAE!=null
+                      ?<><div style={{fontSize:15,fontWeight:700,color:"#64748b"}}>{r.avgWobaMAE}</div>
+                         <div style={{fontSize:9,color:"#334155"}}>wOBA MAE</div></>
+                      :<span style={{color:"#334155"}}>—</span>}
+                  </div>
+                  <div style={{textAlign:"center",fontSize:12,color:"#475569"}}>{r.gamesEval||"—"}</div>
+                </div>
+              ))}
+
+              {done&&(
+                <div style={{padding:"10px 16px",fontSize:10,color:"#334155"}}>
+                  W/L Accuracy: <span style={{color:"#22c55e"}}>green ≥60%</span> · <span style={{color:"#f59e0b"}}>amber ≥50%</span> · <span style={{color:"#ef4444"}}>red &lt;50%</span> · random baseline = 50%.
+                  {fromCache?" Loaded from nightly cache — zero API calls.":" Live computation — results appeared team by team."}
+                </div>
+              )}
+            </div>
+          )}
+
+          {!running&&!done&&results.length===0&&(
+            <div style={{background:"#1e293b",borderRadius:12,padding:32,textAlign:"center",color:"#475569",fontSize:13}}>
+              {sbUrl&&sbKey
+                ? "Loading cached results…"
+                : <>Click <b style={{color:"#7c3aed"}}>Run All Teams</b> to backtest every team (30–60 seconds).<br/>
+                   <span style={{fontSize:11,color:"#334155",marginTop:6,display:"block"}}>Connect Supabase to load instantly from the nightly cache.</span></>
+              }
+            </div>
+          )}
+        </div>
+      );
+    }
+
     // ── Game Plan Tab ─────────────────────────────────────────────────────────
     function GamePlanTab({roster, predCache, dataSource}) {
       const [myTeam,       setMyTeam]       = React.useState(readMeta("default-team")||"");
@@ -433,15 +685,20 @@
       const [schedLoading, setSchedLoading] = React.useState(false);
       const [selectedGame, setSelectedGame] = React.useState(null);
       const [myLineup,     setMyLineup]     = React.useState(null);
+      const [likelyLineup, setLikelyLineup] = React.useState(null);
       const [oppLineup,    setOppLineup]    = React.useState(null);
       const [aiSummary,    setAiSummary]    = React.useState("");
       const [aiLoading,    setAiLoading]    = React.useState(false);
+      const [btResult,     setBtResult]     = React.useState(null);
+      const [btLoading,    setBtLoading]    = React.useState(false);
+      const [btError,      setBtError]      = React.useState("");
 
       const teams = React.useMemo(()=>[...new Set(roster.map(p=>p.team).filter(Boolean))].sort(),[roster]);
 
       React.useEffect(()=>{
         if(!myTeam) return;
-        setSchedLoading(true); setSchedule(null); setSelectedGame(null); setMyLineup(null); setOppLineup(null); setAiSummary("");
+        setSchedLoading(true); setSchedule(null); setSelectedGame(null); setMyLineup(null); setLikelyLineup(null); setOppLineup(null); setAiSummary("");
+        setBtResult(null); setBtError("");
         fetchUpcomingSchedule(myTeam).then(sched=>{
           const games = sched.opponents.map((opp,i)=>({
             dayOffset:i,
@@ -460,12 +717,25 @@
         const myPool = roster.filter(p=>p.team===myTeam&&(p.gamesPlayed||0)>=5)
           .sort((a,b)=>(predCache[b.player_name]?.score||0)-(predCache[a.player_name]?.score||0)).slice(0,14);
         setMyLineup(buildOptimalLineup(myPool, predCache));
+        // Likely lineup: sorted by historical batting spot (same as opponent method)
+        setLikelyLineup(buildOpponentLineup(myPool, predCache));
         if(oppFull){
           const oppPool = roster.filter(p=>p.team===oppFull&&(p.gamesPlayed||0)>=5)
             .sort((a,b)=>(predCache[b.player_name]?.score||0)-(predCache[a.player_name]?.score||0)).slice(0,14);
           setOppLineup(buildOpponentLineup(oppPool, predCache));
         } else { setOppLineup(null); }
       },[selectedGame, roster, predCache, myTeam]);
+
+      const runBacktest = async()=>{
+        if(!myTeam||!roster.length) return;
+        setBtLoading(true); setBtResult(null); setBtError("");
+        try{
+          const result = await backtestGamePlan(myTeam, roster, predCache, null, null, 21);
+          if(result.error){ setBtError(result.error); }
+          else { setBtResult(result); }
+        }catch(e){ setBtError(e.message||"Backtest failed"); }
+        setBtLoading(false);
+      };
 
       const generateAI = async()=>{
         if(!myLineup||!selectedGame) return;
@@ -601,29 +871,104 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
           </div>
 
           {/* Lineups */}
-          <div style={{display:"flex",gap:12,alignItems:"flex-start",marginBottom:16,flexWrap:"wrap"}}>
-            <LineupCard
-              title={myTeam||"My Team"}
-              lineup={myLineup}
-              accentColor="#3b82f6"
-              pitcher={null}
-              teamEra={null}
-              teamWinPct={null}
-            />
-            <LineupCard
-              title={selectedGame?.detail?.teamFullName||selectedGame?.opponent||"Opponent"}
-              lineup={oppLineup}
-              accentColor="#f59e0b"
-              pitcher={selectedGame?.detail?.pitcher||null}
-              teamEra={selectedGame?.detail?.teamEra||null}
-              teamWinPct={selectedGame?.detail?.teamWinPct??null}
-            />
-          </div>
+          {(()=>{
+            // Compute predicted runs for suggested + likely lineups (forward-looking)
+            const oppEra = selectedGame?.detail?.pitcher?.era ?? selectedGame?.detail?.teamEra ?? LEAGUE_AVG_ERA;
+            const oppWinPct = selectedGame?.detail?.teamWinPct ?? 0.500;
+            const lineupPred = (lineup) => {
+              if(!lineup) return null;
+              const wobas = lineup.filter(Boolean).map(e=>e.player?.avgWoba||0.310);
+              const scores = lineup.filter(Boolean).map(e=>{
+                const pr = predCache[e.player?.player_name];
+                return pr?.score||50;
+              });
+              if(!wobas.length) return null;
+              return _predictGame(wobas, scores, oppEra, oppWinPct);
+            };
+            // Pad to 9 entries so LineupCard renders all spots
+            const likelyLineupArr = likelyLineup
+              ? Array.from({length:9},(_,i)=>likelyLineup[i]?{player:likelyLineup[i].player,spotScore:0}:null)
+              : null;
+            const likelyPred = selectedGame ? lineupPred(likelyLineupArr) : null;
+
+            // Opponent prediction: mirror of our prediction (ensures the two win%s sum to 100%)
+            const SPOT_WEIGHTS = [1.15,1.12,1.10,1.05,1.02,0.95,0.90,0.88,0.83];
+            const oppAvgWoba = oppLineup?.length ? (()=>{
+              const entries = oppLineup.filter(Boolean);
+              const weightSum = entries.reduce((_,__,i)=>_+(SPOT_WEIGHTS[i]??0.83),0);
+              const weighted  = entries.reduce((s,e,i)=>s+(e.player?.avgWoba||0.310)*(SPOT_WEIGHTS[i]??0.83),0);
+              return +(weighted/weightSum).toFixed(3);
+            })() : null;
+            const oppPred = likelyPred ? {
+              predictedRuns: likelyPred.oppRunsEst,
+              predictedWoba: oppAvgWoba,
+              predictedWin: !likelyPred.predictedWin,
+              winProb: +(1 - likelyPred.winProb).toFixed(3),
+              oppRunsEst: likelyPred.predictedRuns,
+            } : null;
+
+            const wobaVarianceColor = (mine, theirs) => {
+              if(mine==null||theirs==null) return "#64748b";
+              const pct = (mine - theirs) / theirs;
+              if(pct >= 0.03)  return "#22c55e";
+              if(pct >= 0.01)  return "#a3e635";
+              if(pct >= -0.01) return "#f59e0b";
+              if(pct >= -0.03) return "#fb923c";
+              return "#ef4444";
+            };
+            const myWoba   = likelyPred?.predictedWoba ?? null;
+            const oppWoba  = oppPred?.predictedWoba ?? null;
+
+            const PredStrip = ({pred, color, wobaColor: wc2}) => {
+              if(!pred||!selectedGame) return null;
+              const wp = Math.round(pred.winProb*100);
+              const wc = wp>=55?"#22c55e":wp>=45?"#f59e0b":"#ef4444";
+              return(
+                <div style={{display:"flex",gap:12,alignItems:"center",padding:"6px 8px",background:"#0f172a",borderRadius:6,marginBottom:8,fontSize:11}}>
+                  <span style={{color:"#475569"}}>Predicted:</span>
+                  <span style={{color:wc,fontWeight:700}}>{pred.predictedRuns}R</span>
+                  <span style={{color:wc,fontWeight:700}}>{wp}% win</span>
+                  <span style={{color:wc,fontWeight:700}}>{pred.predictedWin?"▲ W":"▼ L"}</span>
+                  {pred.predictedWoba!=null&&<span style={{color:wc2||"#64748b",fontSize:10}}>avg wOBA {pred.predictedWoba.toFixed(3)}</span>}
+                </div>
+              );
+            };
+
+            return(
+              <div style={{display:"flex",gap:12,alignItems:"flex-start",marginBottom:4,flexWrap:"wrap"}}>
+                {/* Historical lineup (sorted by typical batting spot) */}
+                <div style={{flex:1,minWidth:0}}>
+                  <PredStrip pred={likelyPred} color="#22c55e" wobaColor={wobaVarianceColor(myWoba, oppWoba)}/>
+                  <LineupCard
+                    title={`${myTeam||"My Team"} — Historical`}
+                    lineup={likelyLineupArr}
+                    accentColor="#22c55e"
+                    pitcher={null}
+                    teamEra={null}
+                    teamWinPct={null}
+                  />
+                </div>
+                {/* Opponent */}
+                <div style={{flex:1,minWidth:0}}>
+                  <PredStrip pred={oppPred} color="#f59e0b" wobaColor={wobaVarianceColor(oppWoba, myWoba)}/>
+                  <LineupCard
+                    title={selectedGame?.detail?.teamFullName||selectedGame?.opponent||"Opponent"}
+                    lineup={oppLineup}
+                    accentColor="#f59e0b"
+                    pitcher={selectedGame?.detail?.pitcher||null}
+                    teamEra={selectedGame?.detail?.teamEra||null}
+                    teamWinPct={selectedGame?.detail?.teamWinPct??null}
+                  />
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Legend */}
-          {(myLineup||oppLineup)&&(
+          {(likelyLineup||oppLineup)&&(
             <div style={{fontSize:10,color:"#334155",marginBottom:12}}>
-              † player batting outside their historical spot · wOBA colors: <span style={{color:"#22c55e"}}>elite ≥.370</span> · <span style={{color:"#a3e635"}}>.320+</span> · <span style={{color:"#f59e0b"}}>.280+</span> · <span style={{color:"#ef4444"}}>&lt;.280</span>
+              <span style={{color:"#22c55e"}}>Historical</span> = players ranked by most common batting spot in our DB (not guaranteed to start) ·
+              † = batting outside historical spot · wOBA: <span style={{color:"#22c55e"}}>elite ≥.370</span> · <span style={{color:"#a3e635"}}>.320+</span> · <span style={{color:"#f59e0b"}}>.280+</span> · <span style={{color:"#ef4444"}}>&lt;.280</span>
             </div>
           )}
 
@@ -639,6 +984,96 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
                 </button>
               </div>
               {aiSummary&&<div style={{fontSize:13,color:"#cbd5e1",lineHeight:1.7,whiteSpace:"pre-wrap"}}>{aiSummary}</div>}
+            </div>
+          )}
+
+          {/* ── Backtest Panel ── */}
+          {myTeam&&(
+            <div style={{background:"#1e293b",borderRadius:12,padding:16,marginTop:16}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:btResult||btError?12:0}}>
+                <div>
+                  <span style={{fontWeight:700,fontSize:13,color:"#94a3b8"}}>Prediction Backtest</span>
+                  <span style={{fontSize:11,color:"#475569",marginLeft:8}}>last 3 weeks · {myTeam}</span>
+                </div>
+                <button onClick={runBacktest} disabled={btLoading}
+                  style={{padding:"7px 16px",borderRadius:8,border:"none",cursor:btLoading?"not-allowed":"pointer",
+                    fontWeight:700,fontSize:12,background:"#7c3aed",color:"#fff",opacity:btLoading?0.6:1}}>
+                  {btLoading?"Running…":"Run Backtest"}
+                </button>
+              </div>
+
+              {btError&&<div style={{color:"#ef4444",fontSize:12,padding:"8px 0"}}>{btError}</div>}
+
+              {btResult&&(()=>{
+                const r = btResult;
+                const wobaColor = w => !w?'#64748b':w>=.370?'#22c55e':w>=.320?'#a3e635':w>=.280?'#f59e0b':'#ef4444';
+
+                const SummaryGroup = ({label, accentColor, summary}) => {
+                  if(!summary) return null;
+                  const wp = Math.round(summary.winAccuracy*100);
+                  const wc = wp>=60?"#22c55e":wp>=50?"#f59e0b":"#ef4444";
+                  const rc = summary.avgRunMAE<=1.5?"#22c55e":summary.avgRunMAE<=2.5?"#f59e0b":"#ef4444";
+                  const wbAcc = summary.avgWobaMAE!=null?(Math.max(0,1-summary.avgWobaMAE/0.100)*100).toFixed(0):null;
+                  const wbC = wbAcc>=80?"#22c55e":wbAcc>=65?"#f59e0b":"#ef4444";
+                  return(
+                    <div style={{flex:1,minWidth:220,background:"#0f172a",borderRadius:8,padding:"10px 12px",borderTop:`2px solid ${accentColor}`}}>
+                      <div style={{fontSize:10,fontWeight:700,color:accentColor,marginBottom:8,textTransform:"uppercase",letterSpacing:0.8}}>{label}</div>
+                      <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+                        {[
+                          ["W/L Acc", wp+"%", wc, summary.gamesEval+"g"],
+                          ["Run MAE", summary.avgRunMAE+" R", rc, "avg error"],
+                          wbAcc!=null&&["wOBA Acc", wbAcc+"%", wbC, "MAE "+summary.avgWobaMAE],
+                        ].filter(Boolean).map(([lbl,val,col,sub],j)=>(
+                          <div key={j} style={{minWidth:70}}>
+                            <div style={{fontSize:9,color:"#475569"}}>{lbl}</div>
+                            <div style={{fontSize:16,fontWeight:800,color:col,lineHeight:1.2}}>{val}</div>
+                            <div style={{fontSize:9,color:"#334155"}}>{sub}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                };
+
+                return(
+                  <div>
+                    {/* Summary accuracy cards */}
+                    <div style={{display:"flex",gap:10,marginBottom:12,flexWrap:"wrap"}}>
+                      <SummaryGroup label="Actual Lineup (box score)" accentColor="#22c55e" summary={r.actualSummary}/>
+                      <SummaryGroup label="Suggested Lineup (optimizer)" accentColor="#3b82f6" summary={r.suggestedSummary}/>
+                    </div>
+
+                    {/* How to read */}
+                    <div style={{background:"#0f172a",borderRadius:8,padding:"10px 12px",marginBottom:12,fontSize:11,color:"#64748b",lineHeight:1.7}}>
+                      <div style={{fontWeight:700,color:"#94a3b8",marginBottom:4}}>How to read these results</div>
+                      <div><span style={{color:"#22c55e",fontWeight:700}}>Act:</span> prediction if we had known the actual lineup that played · <span style={{color:"#3b82f6",fontWeight:700}}>Sug:</span> prediction from the optimizer's top-9 pick</div>
+                      <div><b style={{color:"#e2e8f0"}}>X.XR</b> = predicted runs scored by our team · <b style={{color:"#e2e8f0"}}>Y%</b> = modeled win probability · <b style={{color:"#22c55e"}}>W</b>/<b style={{color:"#ef4444"}}>L</b> = predicted outcome (win if ≥50%)</div>
+                      <div><b style={{color:"#e2e8f0"}}>✓</b> = predicted W/L matched the actual result · <b style={{color:"#ef4444"}}>✗</b> = mismatch · <b style={{color:"#e2e8f0"}}>wOBA</b> = team weighted on-base avg for that game</div>
+                      <div style={{marginTop:2}}>Run color: <span style={{color:"#22c55e"}}>green</span> = &lt;1 run off · <span style={{color:"#f59e0b"}}>amber</span> = 1–2 runs off · <span style={{color:"#ef4444"}}>red</span> = &gt;2 runs off. Click any row to expand both lineups.</div>
+                    </div>
+
+                    {/* Column headers */}
+                    <div style={{display:"grid",gridTemplateColumns:"82px 68px 1fr 1fr 1fr 20px",
+                      gap:0,padding:"4px 10px",marginBottom:2}}>
+                      <span style={{fontSize:9,color:"#334155",fontWeight:700}}>DATE</span>
+                      <span style={{fontSize:9,color:"#334155",fontWeight:700}}>OPP</span>
+                      <span style={{fontSize:9,color:"#334155",fontWeight:700}}>SP</span>
+                      <span style={{fontSize:9,color:"#22c55e",fontWeight:700,paddingRight:8}}>US (pred → actual)</span>
+                      <span style={{fontSize:9,color:"#f59e0b",fontWeight:700,paddingLeft:8}}>THEM (pred → actual)</span>
+                      <span/>
+                    </div>
+
+                    {r.games.map((g,i)=>(
+                      <BtGameRow key={i} g={g} idx={i} wobaColor={wobaColor}/>
+                    ))}
+
+                    <div style={{marginTop:10,fontSize:10,color:"#334155"}}>
+                      Runs color: <span style={{color:"#22c55e"}}>green</span> ≤1 off · <span style={{color:"#f59e0b"}}>amber</span> 1–2 off · <span style={{color:"#ef4444"}}>red</span> &gt;2 off.
+                      Opp runs estimated from opponent win% (offensive proxy). Season wOBA used for lineup — isolates roster quality vs matchup. Click row for actual lineup.
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
         </div>
@@ -1348,7 +1783,7 @@ Based specifically on the detected cycle periods and forecast direction above �
 
             {/* ── Main tab bar: Hitters / Pitchers ── */}
             <div style={{display:"flex",gap:4,marginBottom:16,borderBottom:"1px solid #334155",paddingBottom:0}}>
-              {[["hitters","🏏 Hitters"],["pitchers","⚾ Pitchers"],["gameplan","📋 Game Plan"]].map(([tab,label])=>(
+              {[["hitters","🏏 Hitters"],["pitchers","⚾ Pitchers"],["gameplan","📋 Game Predictions"],["predacc","🎯 Prediction Accuracy"]].map(([tab,label])=>(
                 <button key={tab} onClick={()=>setMainTab(tab)}
                   style={{padding:"9px 20px",borderRadius:"8px 8px 0 0",border:"none",cursor:"pointer",fontWeight:700,fontSize:13,
                     background:mainTab===tab?"#1e293b":"transparent",
@@ -1360,9 +1795,14 @@ Based specifically on the detected cycle periods and forecast direction above �
               ))}
             </div>
 
-            {/* ── GAME PLAN TAB ── */}
+            {/* ── GAME PREDICTIONS TAB ── */}
             {mainTab === "gameplan" && (
               <GamePlanTab roster={roster} predCache={predCache} dataSource={dataSource}/>
+            )}
+
+            {/* ── PREDICTION ACCURACY TAB ── */}
+            {mainTab === "predacc" && (
+              <PredictionAccuracyTab roster={roster} predCache={predCache} sbUrl={sbUrl} sbKey={sbKey}/>
             )}
 
             {/* ── PITCHERS TAB ── */}

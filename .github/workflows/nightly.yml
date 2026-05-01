@@ -2,7 +2,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Run mode: nightly or backfill'
+        description: 'Run mode'
         required: true
         default: 'nightly'
         type: choice
@@ -11,8 +11,12 @@ on:
           - backfill
           - nightly-pitchers
           - backfill-pitchers
+          - migrate-cache
+          - backfill-games
+          - nightly-cache
+
   schedule:
-    - cron: '0 9 * * *'
+    - cron: '0 9 * * *'   # 9 AM UTC — after all games are final
 
 jobs:
   fetch:
@@ -26,15 +30,23 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install mlb-statsapi pandas psycopg2-binary python-dotenv
+        run: pip install mlb-statsapi psycopg2-binary python-dotenv
 
-      - name: Run backfill (full season) — batters
+      # ── One-time migrations ────────────────────────────────────────────────
+      - name: Create cache tables (run once)
+        if: github.event.inputs.mode == 'migrate-cache'
+        run: python migrate_cache_tables.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      # ── Backfill modes ────────────────────────────────────────────────────
+      - name: Backfill hitter gamelogs
         if: github.event.inputs.mode == 'backfill'
         run: python backfill_stats.py
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
-      - name: Run backfill (full season) — pitchers
+      - name: Backfill pitcher gamelogs
         if: >
           github.event.inputs.mode == 'backfill' ||
           github.event.inputs.mode == 'backfill-pitchers'
@@ -42,7 +54,17 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
-      - name: Run nightly fetch (yesterday only) — batters
+      - name: Backfill game results (full season)
+        if: >
+          github.event.inputs.mode == 'backfill' ||
+          github.event.inputs.mode == 'backfill-games'
+        run: python fetch_game_results.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          MODE: backfill
+
+      # ── Nightly hitters + pitchers (existing) ─────────────────────────────
+      - name: Nightly hitter gamelogs
         if: >
           github.event.inputs.mode == 'nightly' ||
           github.event.inputs.mode == ''
@@ -50,7 +72,7 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
-      - name: Run nightly fetch (yesterday only) — pitchers
+      - name: Nightly pitcher gamelogs
         if: >
           github.event.inputs.mode == 'nightly' ||
           github.event.inputs.mode == 'nightly-pitchers' ||
@@ -58,3 +80,42 @@ jobs:
         run: python fetch_pitcher_stats.py
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      # ── Nightly cache pipeline (runs after gamelogs are written) ──────────
+      - name: Nightly game results
+        if: >
+          github.event.inputs.mode == 'nightly' ||
+          github.event.inputs.mode == 'nightly-cache' ||
+          github.event.inputs.mode == ''
+        run: python fetch_game_results.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          MODE: nightly
+
+      - name: Nightly team stats cache
+        if: >
+          github.event.inputs.mode == 'nightly' ||
+          github.event.inputs.mode == 'nightly-cache' ||
+          github.event.inputs.mode == ''
+        run: python fetch_team_stats.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: Nightly pitcher profiles
+        if: >
+          github.event.inputs.mode == 'nightly' ||
+          github.event.inputs.mode == 'nightly-cache' ||
+          github.event.inputs.mode == ''
+        run: python fetch_pitcher_profiles.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: Nightly backtest cache (all teams)
+        if: >
+          github.event.inputs.mode == 'nightly' ||
+          github.event.inputs.mode == 'nightly-cache' ||
+          github.event.inputs.mode == ''
+        run: python fetch_backtest_cache.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DAYS: 21

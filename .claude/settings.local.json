@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "WebFetch(domain:statsapi.mlb.com)"
+      "WebFetch(domain:statsapi.mlb.com)",
+      "Bash(grep -n \"GamePlanTab\\\\|upcoming schedule\\\\|predicted runs\\\\|wOBA\" \"c:\\\\\\\\Users\\\\\\\\dmcau\\\\\\\\OneDrive\\\\\\\\Projects\\\\\\\\mlb-tracker\\\\\\\\index.html\")",
+      "Bash(grep -n \"BtGameRow\\\\|function BtGameRow\" \"c:\\\\\\\\Users\\\\\\\\dmcau\\\\\\\\OneDrive\\\\\\\\Projects\\\\\\\\mlb-tracker\\\\\\\\index.html\")"
     ]
   }
 }

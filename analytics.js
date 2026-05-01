@@ -61,9 +61,14 @@ async function _fetchStandings() {
     (d.records || []).forEach(function(rec) {
       (rec.teamRecords || []).forEach(function(tr) {
         var last10 = (tr.records && tr.records.splitRecords || []).find(function(s) { return s.type === 'lastTen'; });
-        var winPct = last10 && (last10.wins + last10.losses) > 0
+        var last10Pct = last10 && (last10.wins + last10.losses) > 0
           ? last10.wins / (last10.wins + last10.losses)
-          : (tr.wins + tr.losses > 0 ? tr.wins / (tr.wins + tr.losses) : 0.500);
+          : null;
+        var seasonPct = tr.wins + tr.losses > 0
+          ? tr.wins / (tr.wins + tr.losses)
+          : 0.500;
+        // Blend 50/50: last-10 is noisy (10 games), season is more stable
+        var winPct = last10Pct != null ? (last10Pct * 0.5 + seasonPct * 0.5) : seasonPct;
         map[tr.team.id] = +winPct.toFixed(3);
       });
     });
@@ -749,6 +754,350 @@ function buildOpponentLineup(players, predCache) {
   });
 }
 
+// ── Game Plan Backtesting ──────────────────────────────────────────────────
+// Weights for the run-prediction model (tunable)
+var BACKTEST_WEIGHTS = {
+  wobaRunScale:    18.5,  // predicted runs = avg_lineup_woba * wobaRunScale
+  scoreBoost:      0.08,  // fractional bonus from avg prediction score (0–99)
+  oppEraScale:     0.75,  // era factor weight — raised from 0.55 so elite/bad starters matter more
+  winMarginThresh: 0.35,  // run-diff threshold below which we call it a toss-up
+  // Batting order PA weights (spots 1-9): top of order sees more PAs per game
+  spotWeights:     [1.15, 1.12, 1.10, 1.05, 1.02, 0.95, 0.90, 0.88, 0.83],
+};
+
+// Fetch past N days of a team's completed games from the MLB Stats API
+async function _fetchPastGames(teamName, days) {
+  var teams = await _fetchTeamsList();
+  var team = teams.find(function(t) { return t.name === teamName; });
+  if (!team) return [];
+
+  var abbrById = {}, nameById = {};
+  teams.forEach(function(t) { abbrById[t.id] = t.abbreviation; nameById[t.id] = t.name; });
+
+  var endDate   = new Date(Date.now() - 86400000); // yesterday
+  var startDate = new Date(Date.now() - days * 86400000);
+  var fmt = function(d) { return d.toISOString().slice(0, 10); };
+
+  var r = await fetch(
+    'https://statsapi.mlb.com/api/v1/schedule?sportId=1&teamId=' + team.id +
+    '&startDate=' + fmt(startDate) + '&endDate=' + fmt(endDate) +
+    '&hydrate=linescore,probablePitcher,boxscore'
+  );
+  var data = await r.json();
+
+  var games = [];
+  (data.dates || []).forEach(function(d) {
+    d.games.forEach(function(g) {
+      if (g.status && g.status.abstractGameState !== 'Final') return;
+      var isHome   = g.teams.home.team.id === team.id;
+      var mySide   = isHome ? g.teams.home : g.teams.away;
+      var oppSide  = isHome ? g.teams.away : g.teams.home;
+      var myRuns   = mySide.score;
+      var oppRuns  = oppSide.score;
+      if (myRuns == null || oppRuns == null) return;
+
+      var spId  = oppSide.probablePitcher && oppSide.probablePitcher.id;
+      games.push({
+        date:        d.date,
+        gameId:      g.gamePk,
+        opponent:    abbrById[oppSide.team.id] || oppSide.team.name,
+        opponentId:  oppSide.team.id,
+        opponentFullName: nameById[oppSide.team.id] || oppSide.team.name,
+        isHome:      isHome,
+        myRuns:      myRuns,
+        oppRuns:     oppRuns,
+        win:         myRuns > oppRuns,
+        spId:        spId || null,
+      });
+    });
+  });
+
+  return games.sort(function(a, b) { return a.date < b.date ? -1 : 1; });
+}
+
+// Fetch team box score data: actual lineup (name, spot, season wOBA from roster) + team wOBA for the game
+async function _fetchGameBoxScore(gameId, teamId, rosterMap) {
+  try {
+    var r = await fetch('https://statsapi.mlb.com/api/v1/game/' + gameId + '/boxscore');
+    var d = await r.json();
+    var side = null;
+    if (d.teams) {
+      var home = d.teams.home, away = d.teams.away;
+      if (home && home.team && home.team.id === teamId) side = home;
+      else if (away && away.team && away.team.id === teamId) side = away;
+    }
+    if (!side || !side.battingOrder) return { woba: null, lineup: [] };
+
+    var agg = { atBats:0, hits:0, doubles:0, triples:0, homeRuns:0,
+                baseOnBalls:0, intentionalWalks:0, hitByPitch:0, sacFlies:0 };
+    var lineup = [];
+
+    side.battingOrder.forEach(function(pid, idx) {
+      var ps  = side.players && side.players['ID' + pid];
+      var st  = ps && ps.stats && ps.stats.batting;
+      var info = ps && ps.person;
+      if (!st) return;
+
+      agg.atBats           += st.atBats          || 0;
+      agg.hits             += st.hits            || 0;
+      agg.doubles          += st.doubles         || 0;
+      agg.triples          += st.triples         || 0;
+      agg.homeRuns         += st.homeRuns        || 0;
+      agg.baseOnBalls      += st.baseOnBalls     || 0;
+      agg.intentionalWalks += st.intentionalWalks || 0;
+      agg.hitByPitch       += st.hitByPitch      || 0;
+      agg.sacFlies         += st.sacFlies        || 0;
+
+      var fullName = info && info.fullName;
+      // Look up season avgWoba from roster (matched by name)
+      var rp = fullName && rosterMap && rosterMap[fullName];
+      lineup.push({
+        spot:     idx + 1,
+        name:     fullName || ('Player ' + pid),
+        avgWoba:  rp ? (rp.avgWoba || 0.310) : 0.310,
+        position: ps && ps.position && ps.position.abbreviation,
+      });
+    });
+
+    var teamWoba = computeWOBA(agg);
+    return {
+      woba:   teamWoba > 0 ? +teamWoba.toFixed(4) : null,
+      lineup: lineup,
+    };
+  } catch(e) { return { woba: null, lineup: [] }; }
+}
+
+// Compute predicted runs/win using pre-game lineup wOBA + pred scores + opp ERA factor
+// oppLineupWoba: opponent's season avg wOBA (from box score lookup) — improves opp run estimate
+function _predictGame(lineupWobas, lineupScores, oppEra, oppWinPct, oppLineupWoba) {
+  var w = BACKTEST_WEIGHTS;
+  var n = lineupWobas.length;
+
+  // #3: Spot-weighted wOBA — top of order sees more PAs; normalized weighted average
+  var rawWeights = w.spotWeights.slice(0, n);
+  var weightSum  = rawWeights.reduce(function(a,b){return a+b;}, 0);
+  var avgWoba = n && weightSum > 0
+    ? lineupWobas.reduce(function(acc, woba, i) {
+        return acc + woba * (rawWeights[i] || 0.83);
+      }, 0) / weightSum
+    : 0.310;
+
+  // #4: Score confidence — dampen score boost when most players default to 50
+  var realScores = lineupScores.filter(function(s) { return s !== 50; }).length;
+  var scoreConfidence = n > 0 ? realScores / n : 0;
+  var avgScore = lineupScores.length ? lineupScores.reduce(function(a,b){return a+b;},0) / lineupScores.length : 50;
+
+  // ERA factor: high opp ERA (easy pitcher) → more runs for us
+  var eraFactor = oppEra != null ? Math.max(0.80, Math.min(1.30, oppEra / LEAGUE_AVG_ERA)) : 1.0;
+  // Score factor dampened by how many players have real (non-default) scores
+  var scoreFactor = 1 + (avgScore - 50) / 99 * w.scoreBoost * scoreConfidence;
+  // Blend ERA factor with neutral (1.0) using oppEraScale weight
+  var adjustedEraFactor = eraFactor * w.oppEraScale + 1.0 * (1 - w.oppEraScale);
+
+  var predictedRuns = avgWoba * w.wobaRunScale * scoreFactor * adjustedEraFactor;
+
+  // Opponent run estimate: blend wOBA-based (accounts for lineup quality/defense)
+  // with win%-based (captures overall team strength). 60/40 when wOBA available.
+  var oppRunsWinPct = 4.65 + (oppWinPct - 0.500) * 13.0;
+  var oppRunsEst = (oppLineupWoba != null && oppLineupWoba > 0)
+    ? oppLineupWoba * w.wobaRunScale * 0.6 + oppRunsWinPct * 0.4
+    : oppRunsWinPct;
+
+  // Win probability: logistic on run differential
+  var runDiff = predictedRuns - oppRunsEst;
+  var winProb = 1 / (1 + Math.exp(-runDiff * 0.55)); // sigmoid, ~50% at diff=0
+
+  return {
+    predictedRuns:  +predictedRuns.toFixed(2),
+    predictedWoba:  +avgWoba.toFixed(4),
+    predictedWin:   winProb >= 0.50,
+    winProb:        +winProb.toFixed(3),
+    oppRunsEst:     +oppRunsEst.toFixed(2),
+    avgScore:       Math.round(avgScore),
+    eraFactor:      +eraFactor.toFixed(3),
+  };
+}
+
+// Main backtest entry point — call with roster data (array of player objects with avgWoba + predScore)
+async function backtestGamePlan(teamName, roster, predCache, sbUrl, sbKey, days) {
+  days = days || 21;
+  var teams = await _fetchTeamsList();
+  var team  = teams.find(function(t) { return t.name === teamName; });
+  if (!team) return { error: 'Team not found: ' + teamName, games: [] };
+
+  // 1. Fetch past games
+  var pastGames = await _fetchPastGames(teamName, days);
+  if (!pastGames.length) return { error: 'No completed games found in last ' + days + ' days', games: [] };
+
+  // Build name → player lookup for box score matching
+  var rosterMap = {};
+  roster.forEach(function(p) { rosterMap[p.player_name] = p; });
+
+  // Suggested lineup: top-9 from our pool sorted by prediction score (constant across all past games)
+  var myPool = roster.filter(function(p) { return p.team === teamName && (p.gamesPlayed || 0) >= 5; })
+                     .sort(function(a, b) { return (predCache[b.player_name]&&predCache[b.player_name].score||0) - (predCache[a.player_name]&&predCache[a.player_name].score||0) });
+  var suggestedTop9 = myPool.slice(0, 9);
+  var suggestedLineup = suggestedTop9.map(function(p, i) {
+    return {
+      spot:     i + 1,
+      name:     p.player_name,
+      avgWoba:  p.avgWoba || 0.310,
+      position: p.position ? p.position.split(',')[0] : '?',
+    };
+  });
+
+  // Gather unique opp team IDs and pitcher IDs
+  var uniqueTeamIds    = [...new Set(pastGames.map(function(g) { return g.opponentId; }))];
+  var uniquePitcherIds = [...new Set(pastGames.map(function(g) { return g.spId; }).filter(Boolean))];
+
+  var [teamEraMap, pitcherMap, standingsMap] = await Promise.all([
+    Promise.all(uniqueTeamIds.map(function(id) {
+      return fetch('https://statsapi.mlb.com/api/v1/teams/' + id + '/stats?stats=season&group=pitching&season=2026&sportId=1')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          var s = d.stats && d.stats[0] && d.stats[0].splits && d.stats[0].splits[0];
+          return { id: id, era: parseFloat(s && s.stat && s.stat.era) || LEAGUE_AVG_ERA };
+        }).catch(function() { return { id: id, era: LEAGUE_AVG_ERA }; });
+    })).then(function(arr) {
+      var m = {}; arr.forEach(function(x) { m[x.id] = x.era; }); return m;
+    }),
+    Promise.all(uniquePitcherIds.map(_fetchPitcherDetails)).then(function(arr) {
+      var m = {}; arr.forEach(function(pd) { m[pd.id] = pd; }); return m;
+    }),
+    _fetchStandings(),
+  ]);
+
+  // 3. Fetch box scores (actual lineup + team wOBA) and build result rows
+  var gameRows = await Promise.all(pastGames.map(async function(g) {
+    var oppEra = g.spId && pitcherMap[g.spId] && pitcherMap[g.spId].era != null
+      ? pitcherMap[g.spId].era
+      : (teamEraMap[g.opponentId] || LEAGUE_AVG_ERA);
+    var oppWinPct = standingsMap[g.opponentId] != null ? standingsMap[g.opponentId] : 0.500;
+
+    // Fetch both box scores simultaneously: our team + opponent
+    var [boxScore, oppBoxScore] = await Promise.all([
+      _fetchGameBoxScore(g.gameId, team.id, rosterMap),
+      _fetchGameBoxScore(g.gameId, g.opponentId, {}),
+    ]);
+    var actualLineup = boxScore.lineup; // [{spot, name, avgWoba, position}]
+
+    // Prediction A: actual lineup that played (season avgWoba per player)
+    var actualWobas  = actualLineup.map(function(p) { return p.avgWoba; });
+    var actualScores = actualLineup.map(function(p) {
+      var rp = rosterMap[p.name];
+      return (rp && predCache[rp.player_name] && predCache[rp.player_name].score) || 50;
+    });
+    var oppLineupWoba = oppBoxScore.woba || null;
+    var predActual = actualWobas.length
+      ? _predictGame(actualWobas, actualScores, oppEra, oppWinPct, oppLineupWoba)
+      : null;
+
+    // Prediction B: suggested (optimizer) lineup — kept for summary stats
+    var sugWobas  = suggestedTop9.map(function(p) { return p.avgWoba || 0.310; });
+    var sugScores = suggestedTop9.map(function(p) { return (predCache[p.player_name] && predCache[p.player_name].score) || 50; });
+    var predSuggested = _predictGame(sugWobas, sugScores, oppEra, oppWinPct, oppLineupWoba);
+
+    // Opponent prediction: use oppRunsEst from our model + actual opp runs for comparison
+    // Our ERA (opponent's pitcher ERA is our ERA from their perspective) — flip:
+    // For the opponent's offense we use our team ERA as their matchup factor
+    var myTeamEra = teamEraMap[team.id] || LEAGUE_AVG_ERA;
+    var myWinPct  = standingsMap[team.id] != null ? standingsMap[team.id] : 0.500;
+    // oppRunsEst is already computed inside predActual; expose it as opponent prediction
+    var oppPredRuns = predActual ? predActual.oppRunsEst : predSuggested.oppRunsEst;
+
+    var sp = g.spId ? pitcherMap[g.spId] : null;
+
+    // Primary metrics use the actual-lineup prediction for backtesting accuracy
+    var primary = predActual || predSuggested;
+    return {
+      date:            g.date,
+      opponent:        g.opponent,
+      opponentFull:    g.opponentFullName,
+      isHome:          g.isHome,
+      actualWin:       g.win,
+      actualRuns:      g.myRuns,
+      oppRuns:         g.oppRuns,
+      actualWoba:      boxScore.woba,
+      oppActualWoba:   oppBoxScore.woba,
+      actualLineup:    actualLineup,
+      suggestedLineup: suggestedLineup,
+      // Opponent prediction (from model's oppRunsEst) vs actual opp runs
+      oppPred: {
+        predictedRuns: oppPredRuns,
+        actualRuns:    g.oppRuns,
+        actualWoba:    oppBoxScore.woba,
+        runError:      +(Math.abs(oppPredRuns - g.oppRuns)).toFixed(2),
+      },
+      // Actual-lineup prediction
+      actual: predActual ? {
+        predictedRuns:  predActual.predictedRuns,
+        predictedWoba:  predActual.predictedWoba,
+        predictedWin:   predActual.predictedWin,
+        winProb:        predActual.winProb,
+        avgScore:       predActual.avgScore,
+        runError:       +(Math.abs(predActual.predictedRuns - g.myRuns)).toFixed(2),
+        wobaError:      boxScore.woba != null ? +(Math.abs(predActual.predictedWoba - boxScore.woba)).toFixed(4) : null,
+      } : null,
+      // Suggested-lineup prediction (kept for summary accuracy stats)
+      suggested: {
+        predictedRuns:  predSuggested.predictedRuns,
+        predictedWoba:  predSuggested.predictedWoba,
+        predictedWin:   predSuggested.predictedWin,
+        winProb:        predSuggested.winProb,
+        avgScore:       predSuggested.avgScore,
+        runError:       +(Math.abs(predSuggested.predictedRuns - g.myRuns)).toFixed(2),
+        wobaError:      boxScore.woba != null ? +(Math.abs(predSuggested.predictedWoba - boxScore.woba)).toFixed(4) : null,
+      },
+      // Legacy flat fields
+      predictedRuns:   primary.predictedRuns,
+      predictedWoba:   primary.predictedWoba,
+      predictedWin:    primary.predictedWin,
+      winProb:         primary.winProb,
+      oppRunsEst:      primary.oppRunsEst,
+      avgScore:        primary.avgScore,
+      oppEra:          +oppEra.toFixed(2),
+      oppWinPct:       oppWinPct,
+      sp:              sp ? { name: sp.name, hand: sp.hand, era: sp.era } : null,
+      runError:        +(Math.abs(primary.predictedRuns - g.myRuns)).toFixed(2),
+      wobaError:       boxScore.woba != null ? +(Math.abs(primary.predictedWoba - boxScore.woba)).toFixed(4) : null,
+    };
+  }));
+
+  // 4. Compute summary metrics for each prediction type
+  function _summarize(rows, key) {
+    var valid = rows.filter(function(r) { return r[key]; });
+    if (!valid.length) return null;
+    var avgRunMAE  = valid.reduce(function(s,r){return s+r[key].runError;},0) / valid.length;
+    var withWoba   = valid.filter(function(r) { return r[key].wobaError != null; });
+    var avgWobaMAE = withWoba.length ? withWoba.reduce(function(s,r){return s+r[key].wobaError;},0) / withWoba.length : null;
+    var correct    = valid.filter(function(r) { return r[key].predictedWin === r.actualWin; }).length;
+    return {
+      winAccuracy:  +(correct / valid.length).toFixed(3),
+      avgRunMAE:    +avgRunMAE.toFixed(2),
+      avgWobaMAE:   avgWobaMAE != null ? +avgWobaMAE.toFixed(4) : null,
+      gamesEval:    valid.length,
+    };
+  }
+
+  var actualSummary    = _summarize(gameRows, 'actual');
+  var suggestedSummary = _summarize(gameRows, 'suggested');
+
+  return {
+    team:             teamName,
+    days:             days,
+    gamesEval:        gameRows.length,
+    suggestedLineup:  suggestedLineup,
+    actualSummary:    actualSummary,
+    suggestedSummary: suggestedSummary,
+    // Legacy top-level fields (actual-lineup based)
+    winAccuracy:  actualSummary ? actualSummary.winAccuracy  : (suggestedSummary ? suggestedSummary.winAccuracy  : 0),
+    avgRunMAE:    actualSummary ? actualSummary.avgRunMAE    : (suggestedSummary ? suggestedSummary.avgRunMAE    : 0),
+    avgWobaMAE:   actualSummary ? actualSummary.avgWobaMAE  : (suggestedSummary ? suggestedSummary.avgWobaMAE   : null),
+    games:        gameRows,
+    weights:      Object.assign({}, BACKTEST_WEIGHTS),
+  };
+}
+
 // ── Node.js exports ────────────────────────────────────────────────────────
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
@@ -762,5 +1111,6 @@ if (typeof module !== 'undefined' && module.exports) {
     backtestForecast, applyPhaseColoring, scoreColor, phaseAvg,
     transformRows, transformMLBSplits,
     scorePlayerAtSpot, buildOptimalLineup, buildOpponentLineup,
+    backtestGamePlan, BACKTEST_WEIGHTS,
   };
 }
