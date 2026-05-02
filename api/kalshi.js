@@ -125,14 +125,28 @@ export default async function handler(req, res) {
 
   const results = {};
 
+  // Month abbreviations for Kalshi ticker date format (26MAY02 = 2026-05-02)
+  const MONTHS = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
+
   for (const game of games) {
-    const { gamePk, homeTeam, awayTeam } = game;
+    const { gamePk, homeTeam, awayTeam, dateStr } = game;
     const homeAbbrs = TEAM_ABBRS[homeTeam] || [];
     const awayAbbrs = TEAM_ABBRS[awayTeam] || [];
     if (!homeAbbrs.length || !awayAbbrs.length) continue;
 
-    // Find matching event
-    const event = events.find(e => tickerMatchesGame(e.event_ticker, homeAbbrs, awayAbbrs));
+    // Build Kalshi date prefix from gameDate e.g. "2026-05-02" → "26MAY02"
+    let kalshiDatePrefix = null;
+    if (dateStr) {
+      const [yr, mo, dy] = dateStr.split("-");
+      kalshiDatePrefix = yr.slice(2) + MONTHS[parseInt(mo,10)-1] + dy;
+    }
+
+    // Find matching event — filter by date prefix if available to avoid multi-series matches
+    const event = events.find(e => {
+      if (!tickerMatchesGame(e.event_ticker, homeAbbrs, awayAbbrs)) return false;
+      if (kalshiDatePrefix) return e.event_ticker.includes(kalshiDatePrefix);
+      return true;
+    });
     if (!event) continue;
 
     // Ticker format: KXMLBGAME-26MAY041840PHIMIA → suffix "PHIMIA" = away+home concatenated

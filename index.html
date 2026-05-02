@@ -802,6 +802,7 @@
                 gamePk:   g.gamePk,
                 homeTeam: g.homeName,
                 awayTeam: g.awayName,
+                dateStr:  g.dateStr,
               }))}),
             }).then(r => r.ok ? r.json() : null)
               .then(d => { if (d?.odds) setKalshiOdds(d.odds); })
