@@ -30,7 +30,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install mlb-statsapi psycopg2-binary python-dotenv
+        run: pip install mlb-statsapi psycopg2-binary python-dotenv cryptography requests
 
       # ── One-time migrations ────────────────────────────────────────────────
       - name: Create cache tables (run once)
@@ -119,3 +119,13 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DAYS: 21
+
+      - name: Nightly Kalshi tracker (log disagreements + fill outcomes)
+        if: >
+          github.event.inputs.mode == 'nightly' ||
+          github.event.inputs.mode == ''
+        run: python fetch_kalshi_outcomes.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          KALSHI_API_KEY_ID: ${{ secrets.KALSHI_API_KEY_ID }}
+          KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}

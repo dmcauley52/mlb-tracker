@@ -755,6 +755,44 @@
             </div>
           )}
 
+          {/* CycleEdge row */}
+          {g.cycleEdge?.home && g.cycleEdge?.away && (()=>{
+            const ce = g.cycleEdge;
+            const ceColor = s => s>=65?'#22c55e':s>=50?'#f59e0b':'#ef4444';
+            const awayAgrees  = (ce.favorite==='away') === (g.favorite==='away');
+            const homeAgrees  = (ce.favorite==='home') === (g.favorite==='home');
+            const bothAgree   = ce.favorite === g.favorite;
+            const borderColor = bothAgree ? 'rgba(99,102,241,0.3)' : 'rgba(245,158,11,0.3)';
+            return (
+              <div style={{marginTop:6,padding:'8px 12px',background:'#0f172a',borderRadius:8,
+                display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',
+                border:`1px solid ${borderColor}`}}>
+                <span style={{fontSize:10,fontWeight:700,color:'#6366f1',letterSpacing:0.5,textTransform:'uppercase',flexShrink:0}}>
+                  Cycle Edge
+                </span>
+                {/* Away */}
+                <div style={{display:'flex',alignItems:'center',gap:5}}>
+                  <span style={{fontSize:11,color:'#94a3b8'}}>{g.awayAbbr}</span>
+                  <span style={{fontSize:15,fontWeight:800,color:ceColor(ce.away.score)}}>{ce.away.score}</span>
+                  <span style={{fontSize:9,color:'#475569'}}>{ce.away.hotCount}/{ce.away.totalCount} hot</span>
+                  {ce.awayProb!=null&&<span style={{fontSize:11,color:ceColor(ce.away.score)}}>{Math.round(ce.awayProb*100)}%</span>}
+                </div>
+                <span style={{color:'#334155',fontSize:11}}>vs</span>
+                {/* Home */}
+                <div style={{display:'flex',alignItems:'center',gap:5}}>
+                  <span style={{fontSize:11,color:'#94a3b8'}}>{g.homeAbbr}</span>
+                  <span style={{fontSize:15,fontWeight:800,color:ceColor(ce.home.score)}}>{ce.home.score}</span>
+                  <span style={{fontSize:9,color:'#475569'}}>{ce.home.hotCount}/{ce.home.totalCount} hot</span>
+                  {ce.homeProb!=null&&<span style={{fontSize:11,color:ceColor(ce.home.score)}}>{Math.round(ce.homeProb*100)}%</span>}
+                </div>
+                {/* Agreement indicator */}
+                <span style={{marginLeft:'auto',fontSize:9,color: bothAgree?'#6366f1':'#f59e0b'}}>
+                  {bothAgree ? '✓ agrees with model' : '⚡ cycle pick differs from model'}
+                </span>
+              </div>
+            );
+          })()}
+
           {/* Lineup panels */}
           {showLineups && (
             <div style={{display:'flex',gap:10,marginTop:12,flexWrap:'wrap'}}>
@@ -778,12 +816,13 @@
       );
     }
 
-    function TodayMatchupsTab({roster, predCache}) {
+    function TodayMatchupsTab({roster, predCache, sbUrl, sbKey}) {
       const [games,      setGames]      = React.useState([]);
       const [loading,    setLoading]    = React.useState(true);
       const [error,      setError]      = React.useState(null);
       const [lastFetch,  setLastFetch]  = React.useState(null);
       const [kalshiOdds, setKalshiOdds] = React.useState({});
+      const [tracker,    setTracker]    = React.useState([]);
 
       // Keep a ref to latest roster/predCache so load() doesn't re-fire when batch updates predCache
       const rosterRef   = React.useRef(roster);
@@ -828,6 +867,14 @@
         const id = setInterval(load, interval);
         return () => clearInterval(id);
       }, [load, games]);
+
+      // Load disagreement tracker from Supabase
+      React.useEffect(() => {
+        if (!sbUrl || !sbKey) return;
+        sbFetch(sbUrl, sbKey,
+          `kalshi_tracker?select=game_date,home_team,away_team,model_pick,kalshi_pick,cycle_pick,prob_gap,signal_type,model_confidence,model_correct,kalshi_correct,cycle_correct,actual_winner&order=game_date.desc&limit=100`
+        ).then(rows => { if (rows?.length) setTracker(rows); }).catch(() => {});
+      }, [sbUrl, sbKey]);
 
       const fmtTime = (iso) => {
         if (!iso) return '—';
@@ -925,6 +972,93 @@
               <span style={{color:'#f59e0b'}}> Amber border = low-confidence disagreement</span>
             </div>
           )}
+
+          {/* ── Disagreement Tracker ── */}
+          {(()=>{
+            const resolved = tracker.filter(r => r.actual_winner);
+            const strong   = resolved.filter(r => r.signal_type === 'strong_edge');
+            const weak     = resolved.filter(r => r.signal_type === 'disagreement');
+            const pct = (arr, key) => arr.length ? Math.round(arr.filter(r=>r[key]).length/arr.length*100) : null;
+            const statCell = (label, val, sub, color) => (
+              <div style={{textAlign:'center',minWidth:60}}>
+                <div style={{fontSize:20,fontWeight:800,color:color||'#94a3b8',lineHeight:1}}>{val!=null?val+'%':'—'}</div>
+                <div style={{fontSize:9,color:'#475569',marginTop:1}}>{label}</div>
+                {sub&&<div style={{fontSize:8,color:'#334155'}}>{sub}</div>}
+              </div>
+            );
+            const col = v => v==null?'#475569':v>=60?'#22c55e':v>=50?'#f59e0b':'#ef4444';
+            return (
+              <div style={{background:'#1e293b',borderRadius:12,padding:16,marginTop:16}}>
+                <div style={{fontWeight:700,fontSize:13,color:'#f1f5f9',marginBottom:4}}>
+                  Model vs Kalshi — Disagreement Tracker
+                </div>
+                <div style={{fontSize:11,color:'#475569',marginBottom:14}}>
+                  Tracks flagged games (≥10% gap) · outcomes filled next day · {resolved.length} resolved so far
+                </div>
+
+                {resolved.length === 0 && (
+                  <div style={{color:'#475569',fontSize:12,padding:'12px 0'}}>
+                    No resolved games yet — outcomes fill in the morning after each game.
+                  </div>
+                )}
+
+                {resolved.length > 0 && (
+                  <div style={{display:'flex',gap:16,flexWrap:'wrap'}}>
+                    {/* Strong edge */}
+                    <div style={{flex:1,minWidth:200,background:'#0f172a',borderRadius:8,padding:'10px 14px',borderTop:'2px solid #22c55e'}}>
+                      <div style={{fontSize:10,fontWeight:700,color:'#22c55e',marginBottom:10,textTransform:'uppercase',letterSpacing:0.5}}>
+                        ⚡ Strong Edge (confidence ≥25%)  · {strong.length} games
+                      </div>
+                      <div style={{display:'flex',gap:16,flexWrap:'wrap'}}>
+                        {statCell('Model', pct(strong,'model_correct'), `${strong.filter(r=>r.model_correct).length}/${strong.length}`, col(pct(strong,'model_correct')))}
+                        {statCell('Kalshi', pct(strong,'kalshi_correct'), `${strong.filter(r=>r.kalshi_correct).length}/${strong.length}`, col(pct(strong,'kalshi_correct')))}
+                        {statCell('Cycle', pct(strong,'cycle_correct'), `${strong.filter(r=>r.cycle_correct).length}/${strong.length}`, col(pct(strong,'cycle_correct')))}
+                      </div>
+                    </div>
+                    {/* Weak disagreement */}
+                    <div style={{flex:1,minWidth:200,background:'#0f172a',borderRadius:8,padding:'10px 14px',borderTop:'2px solid #f59e0b'}}>
+                      <div style={{fontSize:10,fontWeight:700,color:'#f59e0b',marginBottom:10,textTransform:'uppercase',letterSpacing:0.5}}>
+                        Disagreement (confidence &lt;25%)  · {weak.length} games
+                      </div>
+                      <div style={{display:'flex',gap:16,flexWrap:'wrap'}}>
+                        {statCell('Model', pct(weak,'model_correct'), `${weak.filter(r=>r.model_correct).length}/${weak.length}`, col(pct(weak,'model_correct')))}
+                        {statCell('Kalshi', pct(weak,'kalshi_correct'), `${weak.filter(r=>r.kalshi_correct).length}/${weak.length}`, col(pct(weak,'kalshi_correct')))}
+                        {statCell('Cycle', pct(weak,'cycle_correct'), `${weak.filter(r=>r.cycle_correct).length}/${weak.length}`, col(pct(weak,'cycle_correct')))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Recent rows */}
+                {resolved.length > 0 && (
+                  <div style={{marginTop:12}}>
+                    <div style={{fontSize:9,color:'#334155',fontWeight:700,textTransform:'uppercase',letterSpacing:0.5,marginBottom:6}}>Recent</div>
+                    <div style={{display:'grid',gridTemplateColumns:'80px 1fr 60px 60px 60px 60px 60px',gap:0,
+                      padding:'4px 8px',fontSize:9,color:'#475569',fontWeight:700,borderBottom:'1px solid #0f172a'}}>
+                      <span>Date</span><span>Game</span><span style={{textAlign:'center'}}>Gap</span>
+                      <span style={{textAlign:'center'}}>Model</span><span style={{textAlign:'center'}}>Kalshi</span>
+                      <span style={{textAlign:'center'}}>Cycle</span><span style={{textAlign:'center'}}>Result</span>
+                    </div>
+                    {resolved.slice(0,10).map((r,i) => (
+                      <div key={i} style={{display:'grid',gridTemplateColumns:'80px 1fr 60px 60px 60px 60px 60px',
+                        gap:0,padding:'5px 8px',fontSize:10,borderBottom:'1px solid #0f172a',
+                        background:i%2===0?'rgba(15,23,42,0.4)':'transparent',alignItems:'center'}}>
+                        <span style={{color:'#475569'}}>{r.game_date}</span>
+                        <span style={{color:'#e2e8f0',fontWeight:600}}>{r.away_team?.split(' ').pop()} @ {r.home_team?.split(' ').pop()}</span>
+                        <span style={{textAlign:'center',color:r.signal_type==='strong_edge'?'#22c55e':'#f59e0b',fontWeight:700}}>
+                          {r.prob_gap>0?'+':''}{Math.round(r.prob_gap*100)}%
+                        </span>
+                        <span style={{textAlign:'center',fontSize:13}}>{r.model_correct===true?'✓':r.model_correct===false?'✗':'—'}</span>
+                        <span style={{textAlign:'center',fontSize:13}}>{r.kalshi_correct===true?'✓':r.kalshi_correct===false?'✗':'—'}</span>
+                        <span style={{textAlign:'center',fontSize:13}}>{r.cycle_correct===true?'✓':r.cycle_correct===false?'✗':'—'}</span>
+                        <span style={{textAlign:'center',color:'#64748b'}}>{r.actual_winner||'—'}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </div>
       );
     }
@@ -2312,7 +2446,7 @@ Based specifically on the detected cycle periods and forecast direction above �
 
             {/* ── TODAY'S GAMES TAB ── */}
             {mainTab === "todaygames" && (
-              <TodayMatchupsTab roster={roster} predCache={predCache}/>
+              <TodayMatchupsTab roster={roster} predCache={predCache} sbUrl={sbUrl} sbKey={sbKey}/>
             )}
 
             {/* ── PITCHERS TAB ── */}

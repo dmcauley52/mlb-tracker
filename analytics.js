@@ -1298,6 +1298,37 @@ async function fetchTodayGames(roster, predCache) {
     var homeSeasonWoba = teamSeasonWoba(homeId);
     var awaySeasonWoba = teamSeasonWoba(awayId);
 
+    // Build lineup entry arrays for CycleEdge (need full player objects with predCache)
+    function lineupEntries(lineup, teamId) {
+      var players = rosterByTeam[teamId] || [];
+      var rosterMap = {};
+      players.forEach(function(p) { rosterMap[p.player_name] = p; });
+      var entries = [];
+      for (var i = 0; i < 9; i++) {
+        var entry = lineup && lineup[i];
+        var name  = entry && (entry.name || (entry.player && entry.player.player_name));
+        var rp    = name && rosterMap[name];
+        entries.push(rp ? { player: rp } : null);
+      }
+      return entries;
+    }
+    var homeEntries = lineupEntries(homeLineup, homeId);
+    var awayEntries = lineupEntries(awayLineup, awayId);
+    var homeCycleEdge = computeCycleEdge(homeEntries, predCache);
+    var awayCycleEdge = computeCycleEdge(awayEntries, predCache);
+
+    // CycleEdge win probability: logistic on (home - away) cycle edge score difference
+    var cycleEdgeHomeProb = null, cycleEdgeAwayProb = null, cycleEdgeFavorite = null;
+    if (homeCycleEdge && awayCycleEdge) {
+      var ceDiff = (homeCycleEdge.score - awayCycleEdge.score) / 100; // -1 to +1
+      var ceHomeRaw = 1 / (1 + Math.exp(-ceDiff * 3.0)); // sigmoid, k=3
+      var ceAwayRaw = 1 - ceHomeRaw;
+      var ceSum = ceHomeRaw + ceAwayRaw;
+      cycleEdgeHomeProb = +(ceHomeRaw / ceSum).toFixed(3);
+      cycleEdgeAwayProb = +(ceAwayRaw / ceSum).toFixed(3);
+      cycleEdgeFavorite = cycleEdgeHomeProb >= 0.50 ? 'home' : 'away';
+    }
+
     // Home team prediction: faces away SP, away wOBA is opponent lineup
     var homePred = _predictGame(homeArr.wobas, homeArr.scores, awaySpEra, awayWinPct, awaySeasonWoba, homeWinPct);
     // Away team prediction: faces home SP, home wOBA is opponent lineup
@@ -1348,11 +1379,70 @@ async function fetchTodayGames(roster, predCache) {
       },
       mismatch: +mismatch.toFixed(3),
       favorite: normHomeWin >= normAwayWin ? 'home' : 'away',
+      cycleEdge: {
+        home:     homeCycleEdge,
+        away:     awayCycleEdge,
+        homeProb: cycleEdgeHomeProb,
+        awayProb: cycleEdgeAwayProb,
+        favorite: cycleEdgeFavorite,
+      },
     };
   }));
 
   // Sort by mismatch descending (strongest prediction first)
   return gameResults.sort(function(a, b) { return b.mismatch - a.mismatch; });
+}
+
+// ── CycleEdge Score ────────────────────────────────────────────────────────
+// A cycle-and-lineup-weighted alternative to the wOBA run model.
+// Weights cycle phase (40%) + recent trend (30%) + lineup heat (20%) + matchup (10%).
+// Returns 0-100 where 50 = neutral, >50 favours this team.
+function computeCycleEdge(lineupPlayers, predCache) {
+  if (!lineupPlayers || !lineupPlayers.length) return null;
+
+  var valid = lineupPlayers.filter(function(e) {
+    return e && e.player && predCache[e.player.player_name];
+  });
+  if (!valid.length) return null;
+
+  var n = valid.length;
+
+  // Phase score: predCache breakdown.phaseScore (0-30) → normalise to 0-100
+  var avgPhase = valid.reduce(function(s, e) {
+    return s + (predCache[e.player.player_name].breakdown.phaseScore || 15);
+  }, 0) / n;
+  var phaseNorm = (avgPhase / 30) * 100; // 0-100
+
+  // Trend score: breakdown.trendScore (0-25) → normalise to 0-100
+  var avgTrend = valid.reduce(function(s, e) {
+    return s + (predCache[e.player.player_name].breakdown.trendScore || 12);
+  }, 0) / n;
+  var trendNorm = (avgTrend / 25) * 100;
+
+  // Lineup heat: fraction of hot/warm players → 0-100
+  var hotCount = valid.filter(function(e) {
+    var tier = predCache[e.player.player_name].tier;
+    return tier === 'hot' || tier === 'warm';
+  }).length;
+  var heatNorm = (hotCount / n) * 100;
+
+  // Matchup score: breakdown.matchupScore (0-10) → normalise to 0-100
+  var avgMatchup = valid.reduce(function(s, e) {
+    return s + (predCache[e.player.player_name].breakdown.matchupScore || 5);
+  }, 0) / n;
+  var matchupNorm = (avgMatchup / 10) * 100;
+
+  // Weighted blend
+  var raw = phaseNorm * 0.40 + trendNorm * 0.30 + heatNorm * 0.20 + matchupNorm * 0.10;
+
+  return {
+    score:       Math.round(raw),       // 0-100
+    phaseNorm:   Math.round(phaseNorm),
+    trendNorm:   Math.round(trendNorm),
+    heatNorm:    Math.round(heatNorm),
+    hotCount:    hotCount,
+    totalCount:  n,
+  };
 }
 
 // ── Node.js exports ────────────────────────────────────────────────────────
@@ -1369,6 +1459,6 @@ if (typeof module !== 'undefined' && module.exports) {
     transformRows, transformMLBSplits,
     scorePlayerAtSpot, buildOptimalLineup, buildOpponentLineup,
     backtestGamePlan, BACKTEST_WEIGHTS,
-    fetchTodayGames,
+    fetchTodayGames, computeCycleEdge,
   };
 }
