@@ -530,7 +530,7 @@
 
     // ── Today's Matchups Tab ─────────────────────────────────────────────────
     // Extracted game card so useState (lineup toggle) is legal inside .map()
-    function MatchupCard({g, roster, predCache, fmtTime, fmtPct, winColor, mismatchColor, spLabel}) {
+    function MatchupCard({g, roster, predCache, fmtTime, fmtPct, winColor, mismatchColor, spLabel, kalshi}) {
       const [showLineups, setShowLineups] = React.useState(false);
       const [lineups,     setLineups]     = React.useState(null);
 
@@ -556,6 +556,17 @@
       };
 
       const mPct = Math.round(g.mismatch * 100);
+
+      // Kalshi disagreement: our model home win% vs Kalshi implied home win%
+      const kalshiHomeProb = kalshi?.homeWinProb ?? null;
+      const kalshiAwayProb = kalshi?.awayWinProb ?? null;
+      const modelHomeProb  = g.home?.winProb ?? null;
+      const homeGap = (kalshiHomeProb != null && modelHomeProb != null)
+        ? +(modelHomeProb - kalshiHomeProb).toFixed(3) : null;
+      // Significant disagreement: model favors one team but Kalshi favors the other, or gap ≥ 15%
+      const bigDisagreement = homeGap != null && Math.abs(homeGap) >= 0.15;
+      const disagreementDir = homeGap > 0 ? `model favors ${g.homeAbbr} more than Kalshi`
+                            : homeGap < 0 ? `Kalshi favors ${g.homeAbbr} more than model` : null;
 
       const LineupPanel = ({title, lineup, sp, spEra, accentColor}) => {
         const l10wins = null; // not available in today's context
@@ -615,7 +626,8 @@
       };
 
       return (
-        <div style={{background:'#1e293b',borderRadius:12,padding:16,marginBottom:10}}>
+        <div style={{background:'#1e293b',borderRadius:12,padding:16,marginBottom:10,
+          border: bigDisagreement ? '1px solid #f59e0b' : '1px solid transparent'}}>
           {/* Header row */}
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,flexWrap:'wrap',gap:8}}>
             <div style={{display:'flex',alignItems:'center',gap:10}}>
@@ -698,6 +710,45 @@
             </div>
           </div>
 
+          {/* Kalshi market odds row */}
+          {kalshi && !kalshi.error && (
+            <div style={{marginTop:10,padding:'8px 12px',background:'#0f172a',borderRadius:8,
+              display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',
+              border: bigDisagreement ? '1px solid rgba(245,158,11,0.4)' : 'none'}}>
+              <span style={{fontSize:10,fontWeight:700,color:'#475569',letterSpacing:0.5,textTransform:'uppercase',flexShrink:0}}>
+                Kalshi market
+              </span>
+              {/* Away odds */}
+              <div style={{display:'flex',alignItems:'center',gap:5}}>
+                <span style={{fontSize:11,color:'#94a3b8'}}>{g.awayAbbr}</span>
+                <span style={{fontSize:15,fontWeight:800,color:winColor(kalshiAwayProb)}}>{fmtPct(kalshiAwayProb)}</span>
+              </div>
+              <span style={{color:'#334155',fontSize:11}}>vs</span>
+              {/* Home odds */}
+              <div style={{display:'flex',alignItems:'center',gap:5}}>
+                <span style={{fontSize:11,color:'#94a3b8'}}>{g.homeAbbr}</span>
+                <span style={{fontSize:15,fontWeight:800,color:winColor(kalshiHomeProb)}}>{fmtPct(kalshiHomeProb)}</span>
+              </div>
+              {/* Disagreement badge */}
+              {bigDisagreement && disagreementDir && (
+                <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:6,
+                  background:'rgba(245,158,11,0.15)',borderRadius:5,padding:'3px 8px'}}>
+                  <span style={{fontSize:9,color:'#f59e0b',fontWeight:700,textTransform:'uppercase',letterSpacing:0.5}}>
+                    ⚡ Model disagrees
+                  </span>
+                  <span style={{fontSize:10,color:'#f59e0b'}}>
+                    {Math.abs(homeGap * 100).toFixed(0)}% gap · {disagreementDir}
+                  </span>
+                </div>
+              )}
+              {!bigDisagreement && homeGap != null && (
+                <span style={{marginLeft:'auto',fontSize:9,color:'#334155'}}>
+                  model vs market gap: {homeGap > 0 ? '+' : ''}{(homeGap*100).toFixed(0)}%
+                </span>
+              )}
+            </div>
+          )}
+
           {/* Lineup panels */}
           {showLineups && (
             <div style={{display:'flex',gap:10,marginTop:12,flexWrap:'wrap'}}>
@@ -722,10 +773,11 @@
     }
 
     function TodayMatchupsTab({roster, predCache}) {
-      const [games,   setGames]   = React.useState([]);
-      const [loading, setLoading] = React.useState(true);
-      const [error,   setError]   = React.useState(null);
-      const [lastFetch, setLastFetch] = React.useState(null);
+      const [games,      setGames]      = React.useState([]);
+      const [loading,    setLoading]    = React.useState(true);
+      const [error,      setError]      = React.useState(null);
+      const [lastFetch,  setLastFetch]  = React.useState(null);
+      const [kalshiOdds, setKalshiOdds] = React.useState({});
 
       // Keep a ref to latest roster/predCache so load() doesn't re-fire when batch updates predCache
       const rosterRef   = React.useRef(roster);
@@ -739,6 +791,20 @@
           const result = await fetchTodayGames(rosterRef.current, predCacheRef.current);
           setGames(result);
           setLastFetch(new Date());
+          // Fetch Kalshi odds in parallel — don't block if it fails
+          if (result.length) {
+            fetch('/api/kalshi', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ games: result.map(g => ({
+                gamePk:   g.gamePk,
+                homeTeam: g.homeName,
+                awayTeam: g.awayName,
+              }))}),
+            }).then(r => r.ok ? r.json() : null)
+              .then(d => { if (d?.odds) setKalshiOdds(d.odds); })
+              .catch(() => {}); // silent — Kalshi is supplementary
+          }
         } catch(e) {
           setError(e.message);
         } finally {
@@ -808,7 +874,8 @@
             {group.map(g => (
               <MatchupCard key={g.gamePk} g={g} roster={roster} predCache={predCache}
                 fmtTime={fmtTime} fmtPct={fmtPct} winColor={winColor}
-                mismatchColor={mismatchColor} spLabel={spLabel} />
+                mismatchColor={mismatchColor} spLabel={spLabel}
+                kalshi={kalshiOdds[g.gamePk] || null} />
             ))}
           </div>
         );
@@ -844,7 +911,8 @@
           {games.length > 0 && (
             <div style={{fontSize:10,color:'#334155',padding:'4px 8px'}}>
               Confidence = how strongly the model favors one side (0% = coin flip, 100% = certain) ·
-              Green border = model's pick · Est. lineup uses season avg wOBA until official lineups post
+              Green border = model's pick · Est. lineup uses season avg wOBA until official lineups post ·
+              <span style={{color:'#f59e0b'}}> Amber border + ⚡ = model disagrees with Kalshi market by ≥15%</span>
             </div>
           )}
         </div>
