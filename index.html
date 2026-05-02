@@ -558,13 +558,14 @@
       const mPct = Math.round(g.mismatch * 100);
 
       // Kalshi disagreement: our model home win% vs Kalshi implied home win%
+      const isLive = g.state === 'Live';
       const kalshiHomeProb = kalshi?.homeWinProb ?? null;
       const kalshiAwayProb = kalshi?.awayWinProb ?? null;
       const modelHomeProb  = g.home?.winProb ?? null;
       const homeGap = (kalshiHomeProb != null && modelHomeProb != null)
         ? +(modelHomeProb - kalshiHomeProb).toFixed(3) : null;
-      // Significant disagreement: model favors one team but Kalshi favors the other, or gap ≥ 10%
-      const bigDisagreement = homeGap != null && Math.abs(homeGap) >= 0.10;
+      // Only flag disagreement for pre-game — live prices reflect in-game state, not model inputs
+      const bigDisagreement = !isLive && homeGap != null && Math.abs(homeGap) >= 0.10;
       const disagreementDir = homeGap > 0 ? `model favors ${g.homeAbbr} more than Kalshi`
                             : homeGap < 0 ? `Kalshi favors ${g.homeAbbr} more than model` : null;
 
@@ -718,6 +719,7 @@
               <span style={{fontSize:10,fontWeight:700,color:'#475569',letterSpacing:0.5,textTransform:'uppercase',flexShrink:0}}>
                 Kalshi market
               </span>
+              {isLive && <span style={{fontSize:9,fontWeight:700,color:'#22c55e',background:'rgba(34,197,94,0.1)',padding:'1px 6px',borderRadius:3}}>LIVE · prices update in-game</span>}
               {/* Away odds */}
               <div style={{display:'flex',alignItems:'center',gap:5}}>
                 <span style={{fontSize:11,color:'#94a3b8'}}>{g.awayAbbr}</span>
