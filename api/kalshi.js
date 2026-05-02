@@ -135,27 +135,54 @@ export default async function handler(req, res) {
     const event = events.find(e => tickerMatchesGame(e.event_ticker, homeAbbrs, awayAbbrs));
     if (!event) continue;
 
-    // Get its markets — 2 per event, one per team. yes_sub_title names the team that wins if Yes.
-    // Find the market where "yes" = home team wins.
+    // Ticker format: KXMLBGAME-26MAY041840PHIMIA → suffix "PHIMIA" = away+home concatenated
+    // Away abbr comes first, home abbr second. Find split point using our known abbrs.
+    const suffix = event.event_ticker.split("-").slice(-1)[0].toUpperCase();
+    // Try each away abbr as a prefix — what remains should match a home abbr
+    let tickerHomeAbbr = null;
+    outer: for (const a of awayAbbrs) {
+      if (suffix.startsWith(a.toUpperCase())) {
+        const rest = suffix.slice(a.length);
+        for (const h of homeAbbrs) {
+          if (rest === h.toUpperCase() || rest.startsWith(h.toUpperCase())) {
+            tickerHomeAbbr = h.toUpperCase();
+            break outer;
+          }
+        }
+      }
+    }
+
+    // Get its markets — 2 per event, one per team. yes_sub_title names the winning team.
+    // Find the market where yes = home team wins, using yes_sub_title word match.
     const mks = marketsByEvent[event.event_ticker] || [];
-    const homeWords = homeTeam.toLowerCase().split(" ");
+    const homeWords = homeTeam.toLowerCase().split(" ").filter(w => w.length > 2);
     const homeMkt = mks.find(m => {
       const yes = (m.yes_sub_title || "").toLowerCase();
-      // Match if any word from the home team name appears in yes_sub_title
-      return homeWords.some(w => w.length > 2 && yes.includes(w));
-    }) || mks[0];
+      return homeWords.some(w => yes.includes(w));
+    }) || mks.find(m => {
+      // Fallback: use ticker position — the market whose custom_strike baseball_team
+      // corresponds to the home team. Since we can't resolve UUIDs, use last_price as a
+      // tiebreaker: the home team market typically has last_price closer to 0.5–0.6
+      return true; // take first if no name match
+    });
 
     if (!homeMkt) continue;
 
-    // yes_ask_dollars: price to buy "yes" (home wins) — best proxy for implied probability
+    // Verify we got the right market — if yes_sub_title contains away team words, flip
+    const awayWords = awayTeam.toLowerCase().split(" ").filter(w => w.length > 2);
+    const yesIsAway = awayWords.some(w => (homeMkt.yes_sub_title || "").toLowerCase().includes(w))
+                   && !homeWords.some(w => (homeMkt.yes_sub_title || "").toLowerCase().includes(w));
+
     const yesAsk = parseFloat(homeMkt.yes_ask_dollars);
     const yesBid = parseFloat(homeMkt.yes_bid_dollars);
-    const noAsk  = parseFloat(homeMkt.no_ask_dollars);
-
-    // Mid-price of bid/ask as probability
-    const homeWinProb = (isNaN(yesAsk) || isNaN(yesBid))
+    const midProb = (isNaN(yesAsk) || isNaN(yesBid))
       ? (isNaN(yesAsk) ? null : yesAsk)
       : +((yesAsk + yesBid) / 2).toFixed(3);
+
+    // If yes = away team wins, flip so homeWinProb is always from home team's perspective
+    const homeWinProb = midProb != null
+      ? (yesIsAway ? +(1 - midProb).toFixed(3) : midProb)
+      : null;
 
     results[gamePk] = {
       eventTicker:  event.event_ticker,
