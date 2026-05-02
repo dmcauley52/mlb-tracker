@@ -563,8 +563,8 @@
       const modelHomeProb  = g.home?.winProb ?? null;
       const homeGap = (kalshiHomeProb != null && modelHomeProb != null)
         ? +(modelHomeProb - kalshiHomeProb).toFixed(3) : null;
-      // Significant disagreement: model favors one team but Kalshi favors the other, or gap ≥ 15%
-      const bigDisagreement = homeGap != null && Math.abs(homeGap) >= 0.15;
+      // Significant disagreement: model favors one team but Kalshi favors the other, or gap ≥ 10%
+      const bigDisagreement = homeGap != null && Math.abs(homeGap) >= 0.10;
       const disagreementDir = homeGap > 0 ? `model favors ${g.homeAbbr} more than Kalshi`
                             : homeGap < 0 ? `Kalshi favors ${g.homeAbbr} more than model` : null;
 
@@ -912,7 +912,7 @@
             <div style={{fontSize:10,color:'#334155',padding:'4px 8px'}}>
               Confidence = how strongly the model favors one side (0% = coin flip, 100% = certain) ·
               Green border = model's pick · Est. lineup uses season avg wOBA until official lineups post ·
-              <span style={{color:'#f59e0b'}}> Amber border + ⚡ = model disagrees with Kalshi market by ≥15%</span>
+              <span style={{color:'#f59e0b'}}> Amber border + ⚡ = model disagrees with Kalshi market by ≥10%</span>
             </div>
           )}
         </div>
