@@ -1098,6 +1098,241 @@ async function backtestGamePlan(teamName, roster, predCache, sbUrl, sbKey, days)
   };
 }
 
+// ── Today's Matchups: fetch all games for today+tomorrow with predictions ──
+// Returns array of game objects sorted by probability mismatch (largest first).
+// For each game, calls _predictGame for both home and away sides.
+// Lineups: if boxscore is available (game started or within ~1h of first pitch), use it.
+//           Otherwise fall back to season wOBA averages from the roster.
+async function fetchTodayGames(roster, predCache) {
+  // Use local date strings so "today" matches the user's timezone, not UTC
+  var fmt = function(d) {
+    var y = d.getFullYear();
+    var m = String(d.getMonth() + 1).padStart(2, '0');
+    var day = String(d.getDate()).padStart(2, '0');
+    return y + '-' + m + '-' + day;
+  };
+  var today = new Date();
+  var tomorrow = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+  var todayStr    = fmt(today);
+  var tomorrowStr = fmt(tomorrow);
+
+  var teams      = await _fetchTeamsList();
+  var standings  = await _fetchStandings();
+
+  var abbrById = {}, nameById = {}, leagueById = {};
+  teams.forEach(function(t) {
+    abbrById[t.id]  = t.abbreviation;
+    nameById[t.id]  = t.name;
+    leagueById[t.id] = t.league && t.league.id;
+  });
+
+  // Roster lookup: teamId → players with avgWoba + predScore
+  var rosterByTeam = {};
+  (roster || []).forEach(function(p) {
+    // match by team name
+    var teamObj = teams.find(function(t) { return t.name === p.team; });
+    var tid = teamObj && teamObj.id;
+    if (!tid) return;
+    if (!rosterByTeam[tid]) rosterByTeam[tid] = [];
+    rosterByTeam[tid].push(p);
+  });
+
+  var schedResp = await fetch(
+    'https://statsapi.mlb.com/api/v1/schedule?sportId=1' +
+    '&startDate=' + todayStr + '&endDate=' + tomorrowStr +
+    '&hydrate=probablePitcher,linescore,teams'
+  );
+  var schedData = await schedResp.json();
+
+  var rawGames = [];
+  (schedData.dates || []).forEach(function(d) {
+    d.games.forEach(function(g) {
+      var state = g.status && g.status.abstractGameState;
+      // Skip final games (show in-progress and upcoming)
+      if (state === 'Final') return;
+      rawGames.push({ dateStr: d.date, game: g });
+    });
+  });
+
+  if (!rawGames.length) return [];
+
+  // Collect unique pitcher IDs to batch-fetch details
+  var pitcherIds = {};
+  rawGames.forEach(function(entry) {
+    var g = entry.game;
+    var homeSp = g.teams.home.probablePitcher && g.teams.home.probablePitcher.id;
+    var awaySp = g.teams.away.probablePitcher && g.teams.away.probablePitcher.id;
+    if (homeSp) pitcherIds[homeSp] = true;
+    if (awaySp) pitcherIds[awaySp] = true;
+  });
+
+  // Collect unique team IDs for ERA fetching
+  var teamIds = {};
+  rawGames.forEach(function(entry) {
+    teamIds[entry.game.teams.home.team.id] = true;
+    teamIds[entry.game.teams.away.team.id] = true;
+  });
+
+  var uniquePitcherIds = Object.keys(pitcherIds).map(Number);
+  var uniqueTeamIds    = Object.keys(teamIds).map(Number);
+
+  var pitcherDetailsList = await Promise.all(uniquePitcherIds.map(_fetchPitcherDetails));
+  var pitcherMap = {};
+  pitcherDetailsList.forEach(function(pd) { pitcherMap[pd.id] = pd; });
+
+  var teamEraResults = await Promise.all(uniqueTeamIds.map(function(id) {
+    return fetch(
+      'https://statsapi.mlb.com/api/v1/teams/' + id +
+      '/stats?stats=season&group=pitching&season=2026&sportId=1'
+    ).then(function(r) { return r.json(); })
+     .then(function(d) {
+       var s = d.stats && d.stats[0] && d.stats[0].splits && d.stats[0].splits[0];
+       return { id: id, era: parseFloat(s && s.stat && s.stat.era) || LEAGUE_AVG_ERA };
+     })
+     .catch(function() { return { id: id, era: LEAGUE_AVG_ERA }; });
+  }));
+  var teamEraMap = {};
+  teamEraResults.forEach(function(r) { teamEraMap[r.id] = r.era; });
+
+  // Helper: get season wOBA avg for a team from roster (fallback when no lineup)
+  function teamSeasonWoba(teamId) {
+    var players = rosterByTeam[teamId];
+    if (!players || !players.length) return 0.310;
+    var vals = players.map(function(p) { return p.avgWoba || 0.310; });
+    return vals.reduce(function(a,b){return a+b;},0) / vals.length;
+  }
+
+  // Helper: build spot-indexed woba/score arrays from a lineup (9 entries, nulls ok)
+  function lineupArrays(lineup, teamId) {
+    var wobas = [], scores = [];
+    var players = rosterByTeam[teamId] || [];
+    var rosterMap = {};
+    players.forEach(function(p) { rosterMap[p.player_name] = p; });
+
+    for (var i = 0; i < 9; i++) {
+      var entry = lineup && lineup[i];
+      var name  = entry && (entry.name || (entry.player && entry.player.player_name));
+      var rp    = name && rosterMap[name];
+      wobas.push(rp ? (rp.avgWoba || 0.310) : 0.310);
+      var score = rp && predCache && predCache[rp.player_name] && predCache[rp.player_name].score;
+      scores.push(typeof score === 'number' ? score : 50);
+    }
+    return { wobas: wobas, scores: scores };
+  }
+
+  // For each game, attempt to fetch boxscore (used when game is live or lineup is posted)
+  var gameResults = await Promise.all(rawGames.map(async function(entry) {
+    var g       = entry.game;
+    var dateStr = entry.dateStr;
+    var homeId  = g.teams.home.team.id;
+    var awayId  = g.teams.away.team.id;
+    var homeAbbr = abbrById[homeId] || g.teams.home.team.name;
+    var awayAbbr = abbrById[awayId] || g.teams.away.team.name;
+    var homeName = nameById[homeId] || g.teams.home.team.name;
+    var awayName = nameById[awayId] || g.teams.away.team.name;
+    var state    = g.status && g.status.abstractGameState; // 'Preview' or 'Live'
+
+    var homeSpId = g.teams.home.probablePitcher && g.teams.home.probablePitcher.id;
+    var awaySpId = g.teams.away.probablePitcher && g.teams.away.probablePitcher.id;
+    var homeSp   = homeSpId ? pitcherMap[homeSpId] : null;
+    var awaySp   = awaySpId ? pitcherMap[awaySpId] : null;
+
+    // ERA used for prediction: SP era if available, else team era
+    var homeSpEra = (homeSp && homeSp.era != null) ? homeSp.era : teamEraMap[homeId] || LEAGUE_AVG_ERA;
+    var awaySpEra = (awaySp && awaySp.era != null) ? awaySp.era : teamEraMap[awayId] || LEAGUE_AVG_ERA;
+    var homeWinPct = standings[homeId] != null ? standings[homeId] : 0.500;
+    var awayWinPct = standings[awayId] != null ? standings[awayId] : 0.500;
+
+    // Try to get actual lineup from boxscore (game started or lineup released)
+    var homeLineup = null, awayLineup = null;
+    var lineupSource = 'estimated'; // 'actual' or 'estimated'
+    try {
+      var bsResp = await fetch('https://statsapi.mlb.com/api/v1/game/' + g.gamePk + '/boxscore');
+      var bs     = await bsResp.json();
+      if (bs.teams) {
+        var homeSide = bs.teams.home, awaySide = bs.teams.away;
+        if (homeSide && homeSide.battingOrder && homeSide.battingOrder.length >= 9) {
+          homeLineup = homeSide.battingOrder.map(function(pid, idx) {
+            var ps   = homeSide.players && homeSide.players['ID' + pid];
+            var info = ps && ps.person;
+            return { spot: idx + 1, name: info && info.fullName };
+          });
+          lineupSource = 'actual';
+        }
+        if (awaySide && awaySide.battingOrder && awaySide.battingOrder.length >= 9) {
+          awayLineup = awaySide.battingOrder.map(function(pid, idx) {
+            var ps   = awaySide.players && awaySide.players['ID' + pid];
+            var info = ps && ps.person;
+            return { spot: idx + 1, name: info && info.fullName };
+          });
+          lineupSource = 'actual';
+        }
+      }
+    } catch(e) { /* boxscore unavailable — use estimated */ }
+
+    // Build wOBA/score arrays (from actual lineup if available, else team season avg)
+    var homeArr = lineupArrays(homeLineup, homeId);
+    var awayArr = lineupArrays(awayLineup, awayId);
+    var homeSeasonWoba = teamSeasonWoba(homeId);
+    var awaySeasonWoba = teamSeasonWoba(awayId);
+
+    // Home team prediction: faces away SP, away wOBA is opponent lineup
+    var homePred = _predictGame(homeArr.wobas, homeArr.scores, awaySpEra, awayWinPct, awaySeasonWoba);
+    // Away team prediction: faces home SP, home wOBA is opponent lineup
+    var awayPred = _predictGame(awayArr.wobas, awayArr.scores, homeSpEra, homeWinPct, homeSeasonWoba);
+
+    // Normalise to sum to 1 (sigmoid outputs are independent; blend for display)
+    var rawHome = homePred.winProb;
+    var rawAway = awayPred.winProb;
+    var sum     = rawHome + rawAway;
+    var normHomeWin = sum > 0 ? rawHome / sum : 0.500;
+    var normAwayWin = sum > 0 ? rawAway / sum : 0.500;
+
+    // Mismatch = how far from 50/50 (0 = coin flip, 1 = certain)
+    var mismatch = Math.abs(normHomeWin - 0.5) * 2;
+
+    // Parse game time (ISO string from API)
+    var gameTime = g.gameDate || null; // UTC ISO string
+
+    return {
+      gamePk:        g.gamePk,
+      dateStr:       dateStr,
+      gameTime:      gameTime,
+      state:         state,
+      homeId:        homeId,
+      awayId:        awayId,
+      homeAbbr:      homeAbbr,
+      awayAbbr:      awayAbbr,
+      homeName:      homeName,
+      awayName:      awayName,
+      homeSp:        homeSp,
+      awaySp:        awaySp,
+      homeSpEra:     +homeSpEra.toFixed(2),
+      awaySpEra:     +awaySpEra.toFixed(2),
+      homeWinPct:    homeWinPct,
+      awayWinPct:    awayWinPct,
+      lineupSource:  lineupSource,
+      home: {
+        predictedRuns: homePred.predictedRuns,
+        predictedWoba: homePred.predictedWoba,
+        winProb:       +normHomeWin.toFixed(3),
+        avgScore:      homePred.avgScore,
+      },
+      away: {
+        predictedRuns: awayPred.predictedRuns,
+        predictedWoba: awayPred.predictedWoba,
+        winProb:       +normAwayWin.toFixed(3),
+        avgScore:      awayPred.avgScore,
+      },
+      mismatch: +mismatch.toFixed(3),
+      favorite: normHomeWin >= normAwayWin ? 'home' : 'away',
+    };
+  }));
+
+  // Sort by mismatch descending (strongest prediction first)
+  return gameResults.sort(function(a, b) { return b.mismatch - a.mismatch; });
+}
+
 // ── Node.js exports ────────────────────────────────────────────────────────
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
@@ -1112,5 +1347,6 @@ if (typeof module !== 'undefined' && module.exports) {
     transformRows, transformMLBSplits,
     scorePlayerAtSpot, buildOptimalLineup, buildOpponentLineup,
     backtestGamePlan, BACKTEST_WEIGHTS,
+    fetchTodayGames,
   };
 }
