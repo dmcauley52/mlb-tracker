@@ -139,3 +139,9 @@ Defined in `analytics.js` — `BACKTEST_WEIGHTS` (keep in sync with `fetch_backt
 - **Windows env vars**: use `set MODE=backfill` on its own line before running the script, not inline
 - **React "object not valid as child"**: check for field name collisions — `g.opponent` is the team abbreviation string, prediction object is `g.oppPred`
 - **useState in .map()**: extract to a named component (see `BtGameRow`) — hooks cannot be called inside array callbacks
+
+### Code Reuse & Architecture
+- **Don't duplicate logic**: Before writing new code, use `grep` or `search` to check if similar logic already exists in the codebase.
+- **Prioritize shared modules**: Always reuse functions from `src/utils/` or `src/components/shared/` before creating new ones.
+- **Consolidate on sight**: If you encounter duplicated logic across multiple files, stop and propose a refactor to move that logic to a central utility.
+- **Architectural patterns**: Strictly follow the patterns defined in [link to your architecture doc]. If a change deviates from these patterns, flag it first.

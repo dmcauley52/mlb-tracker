@@ -135,7 +135,11 @@
         map[k].sumHR   += r.home_runs||0;
         map[k].sumSB   += r.stolen_bases||0;
         const wb = parseFloat(r.woba);
-        if(!isNaN(wb)&&wb>0){ map[k].wobaSum+=wb; map[k].wobaCount++; }
+        // Fix 2: weight recent games more — rows arrive desc by game_date so rowIdx=0 is most recent
+        if(!isNaN(wb)&&wb>0){
+          const recencyW = map[k].rowIdx < 21 ? 1.5 : 1.0;
+          map[k].wobaSum+=wb*recencyW; map[k].wobaCount+=recencyW;
+        }
         const op = parseFloat(r.obp);
         if(!isNaN(op)&&op>0){ map[k].obpSum+=op; map[k].obpCount++; }
         if(r.batting_order) map[k].spotCounts[r.batting_order]=(map[k].spotCounts[r.batting_order]||0)+1;
@@ -1015,6 +1019,8 @@
       const [btResult,     setBtResult]     = React.useState(null);
       const [btLoading,    setBtLoading]    = React.useState(false);
       const [btError,      setBtError]      = React.useState("");
+      const [myWinPct,     setMyWinPct]     = React.useState(0.500);
+      const [myTeamEra,    setMyTeamEra]    = React.useState(LEAGUE_AVG_ERA);
 
       const teams = React.useMemo(()=>[...new Set(roster.map(p=>p.team).filter(Boolean))].sort(),[roster]);
 
@@ -1030,6 +1036,8 @@
             detail: sched.matchupDetails?.[i],
             factor: sched.opponentFactors?.[i],
           })).filter(g=>g.opponent&&g.opponent!=='---');
+          setMyWinPct(sched.myWinPct ?? 0.500);
+          setMyTeamEra(sched.myTeamEra ?? LEAGUE_AVG_ERA);
           setSchedule({games,sched}); setSchedLoading(false);
         }).catch(()=>setSchedLoading(false));
       },[myTeam]);
@@ -1198,6 +1206,14 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
             // Compute predicted runs for suggested + likely lineups (forward-looking)
             const oppEra = selectedGame?.detail?.pitcher?.era ?? selectedGame?.detail?.teamEra ?? LEAGUE_AVG_ERA;
             const oppWinPct = selectedGame?.detail?.teamWinPct ?? 0.500;
+            // Our team: ERA we face + our win% for quality discount
+            const myEra = selectedGame?.detail?.pitcher?.era ?? selectedGame?.detail?.teamEra ?? LEAGUE_AVG_ERA;
+            // Opponent lineup avg wOBA — passed as oppLineupWoba so run estimate blends wOBA+win%
+            const oppLineupAvgWoba = oppLineup?.length ? (()=>{
+              const entries = oppLineup.filter(Boolean);
+              if(!entries.length) return null;
+              return +(entries.reduce((s,e)=>s+(e.player?.avgWoba||0.310),0)/entries.length).toFixed(3);
+            })() : null;
             const lineupPred = (lineup) => {
               if(!lineup) return null;
               const wobas = lineup.filter(Boolean).map(e=>e.player?.avgWoba||0.310);
@@ -1206,7 +1222,7 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
                 return pr?.score||50;
               });
               if(!wobas.length) return null;
-              return _predictGame(wobas, scores, oppEra, oppWinPct);
+              return _predictGame(wobas, scores, myEra, oppWinPct, oppLineupAvgWoba, myWinPct);
             };
             // Pad to 9 entries so LineupCard renders all spots
             const likelyLineupArr = likelyLineup
@@ -1214,7 +1230,8 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
               : null;
             const likelyPred = selectedGame ? lineupPred(likelyLineupArr) : null;
 
-            // Opponent prediction: mirror of our prediction (ensures the two win%s sum to 100%)
+            // Opponent prediction: independent _predictGame call (mirrors Today's Games approach)
+            // Opponent faces our team ERA; our win% becomes their opponent win%
             const SPOT_WEIGHTS = [1.15,1.12,1.10,1.05,1.02,0.95,0.90,0.88,0.83];
             const oppAvgWoba = oppLineup?.length ? (()=>{
               const entries = oppLineup.filter(Boolean);
@@ -1222,13 +1239,31 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
               const weighted  = entries.reduce((s,e,i)=>s+(e.player?.avgWoba||0.310)*(SPOT_WEIGHTS[i]??0.83),0);
               return +(weighted/weightSum).toFixed(3);
             })() : null;
-            const oppPred = likelyPred ? {
-              predictedRuns: likelyPred.oppRunsEst,
+            const oppScores = oppLineup?.length
+              ? oppLineup.filter(Boolean).map(e=>predCache[e.player?.player_name]?.score||50)
+              : Array(9).fill(50);
+            const oppWobas = oppLineup?.length
+              ? oppLineup.filter(Boolean).map(e=>e.player?.avgWoba||0.310)
+              : Array(9).fill(oppAvgWoba||0.310);
+            // Opponent faces our team's actual ERA (fetched from standings in fetchUpcomingSchedule)
+            const rawOppPred = likelyPred && oppWobas.length
+              ? _predictGame(oppWobas, oppScores, myTeamEra, myWinPct, null, oppWinPct)
+              : null;
+            // Normalise so both win probs sum to 1 (same as Today's Games)
+            const rawMyProb  = likelyPred?.winProb ?? 0.5;
+            const rawOppProb = rawOppPred?.winProb ?? (1 - rawMyProb);
+            const probSum = rawMyProb + rawOppProb;
+            const normMyProb  = probSum > 0 ? +(rawMyProb  / probSum).toFixed(3) : 0.500;
+            const normOppProb = probSum > 0 ? +(rawOppProb / probSum).toFixed(3) : 0.500;
+            const oppPred = rawOppPred ? {
+              predictedRuns: rawOppPred.predictedRuns,
               predictedWoba: oppAvgWoba,
-              predictedWin: !likelyPred.predictedWin,
-              winProb: +(1 - likelyPred.winProb).toFixed(3),
-              oppRunsEst: likelyPred.predictedRuns,
+              predictedWin:  normOppProb >= 0.5,
+              winProb:       normOppProb,
+              oppRunsEst:    rawOppPred.oppRunsEst,
             } : null;
+            // Patch likelyPred win prob with normalised value
+            const myPred = likelyPred ? {...likelyPred, winProb: normMyProb, predictedWin: normMyProb >= 0.5} : null;
 
             const wobaVarianceColor = (mine, theirs) => {
               if(mine==null||theirs==null) return "#64748b";
@@ -1239,7 +1274,7 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
               if(pct >= -0.03) return "#fb923c";
               return "#ef4444";
             };
-            const myWoba   = likelyPred?.predictedWoba ?? null;
+            const myWoba   = myPred?.predictedWoba ?? null;
             const oppWoba  = oppPred?.predictedWoba ?? null;
 
             const PredStrip = ({pred, color, wobaColor: wc2}) => {
@@ -1253,6 +1288,7 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
                   <span style={{color:wc,fontWeight:700}}>{wp}% win</span>
                   <span style={{color:wc,fontWeight:700}}>{pred.predictedWin?"▲ W":"▼ L"}</span>
                   {pred.predictedWoba!=null&&<span style={{color:wc2||"#64748b",fontSize:10}}>avg wOBA {pred.predictedWoba.toFixed(3)}</span>}
+                  <span style={{marginLeft:"auto",fontSize:9,color:"#334155",fontStyle:"italic"}}>historical batting order · may differ from Today's Games</span>
                 </div>
               );
             };
@@ -1261,7 +1297,7 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
               <div style={{display:"flex",gap:12,alignItems:"flex-start",marginBottom:4,flexWrap:"wrap"}}>
                 {/* Historical lineup (sorted by typical batting spot) */}
                 <div style={{flex:1,minWidth:0}}>
-                  <PredStrip pred={likelyPred} color="#22c55e" wobaColor={wobaVarianceColor(myWoba, oppWoba)}/>
+                  <PredStrip pred={myPred} color="#22c55e" wobaColor={wobaVarianceColor(myWoba, oppWoba)}/>
                   <LineupCard
                     title={`${myTeam||"My Team"} — Historical`}
                     lineup={likelyLineupArr}
@@ -1358,6 +1394,32 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
                   );
                 };
 
+                // ── Statistical summary panel ──────────────────────────────
+                const validGames = r.games.filter(g=>g.actual);
+                const n = validGames.length;
+                // W/L correct count
+                const correct = validGames.filter(g=>g.actual.predictedWin===g.actualWin).length;
+                const pctCorrect = n ? Math.round(correct/n*100) : null;
+                // Brier score: mean((p_win - actual_win)^2) — lower is better; 0.25 = random
+                const brierScore = n ? +(validGames.reduce((s,g)=>{
+                  const p = g.actual.winProb;
+                  const a = g.actualWin ? 1 : 0;
+                  return s + (p-a)*(p-a);
+                },0)/n).toFixed(3) : null;
+                // Brier skill score vs random baseline (0.25): higher=better, 1=perfect, 0=no better than random
+                const bss = brierScore!=null ? +(1 - brierScore/0.25).toFixed(3) : null;
+                // Calibration: avg predicted win prob vs actual win rate
+                const avgPredWinProb = n ? +(validGames.reduce((s,g)=>s+g.actual.winProb,0)/n).toFixed(3) : null;
+                const actualWinRate  = n ? +(validGames.filter(g=>g.actualWin).length/n).toFixed(3) : null;
+                const calibrationErr = avgPredWinProb!=null&&actualWinRate!=null ? +(Math.abs(avgPredWinProb-actualWinRate)).toFixed(3) : null;
+                // Run MAE from actual-lineup predictions
+                const runMAE = n ? +(validGames.reduce((s,g)=>s+g.actual.runError,0)/n).toFixed(2) : null;
+
+                const pctCol = pctCorrect==null?"#475569":pctCorrect>=60?"#22c55e":pctCorrect>=50?"#f59e0b":"#ef4444";
+                const bssCol = bss==null?"#475569":bss>=0.10?"#22c55e":bss>=0?"#f59e0b":"#ef4444";
+                const calCol = calibrationErr==null?"#475569":calibrationErr<=0.05?"#22c55e":calibrationErr<=0.10?"#f59e0b":"#ef4444";
+                const runCol = runMAE==null?"#475569":runMAE<=1.5?"#22c55e":runMAE<=2.5?"#f59e0b":"#ef4444";
+
                 return(
                   <div>
                     {/* Summary accuracy cards */}
@@ -1365,6 +1427,48 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
                       <SummaryGroup label="Actual Lineup (box score)" accentColor="#22c55e" summary={r.actualSummary}/>
                       <SummaryGroup label="Suggested Lineup (optimizer)" accentColor="#3b82f6" summary={r.suggestedSummary}/>
                     </div>
+
+                    {/* Statistical summary panel */}
+                    {n>0&&(
+                      <div style={{background:"#0f172a",borderRadius:8,padding:"12px 14px",marginBottom:12,borderTop:"2px solid #7c3aed"}}>
+                        <div style={{fontSize:10,fontWeight:700,color:"#7c3aed",marginBottom:10,textTransform:"uppercase",letterSpacing:0.8}}>
+                          Statistical Summary · {n} games
+                        </div>
+                        <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
+                          {/* W/L Accuracy */}
+                          <div style={{minWidth:80}}>
+                            <div style={{fontSize:9,color:"#475569",marginBottom:2}}>W/L Correct</div>
+                            <div style={{fontSize:22,fontWeight:800,color:pctCol,lineHeight:1}}>{pctCorrect!=null?pctCorrect+"%":"—"}</div>
+                            <div style={{fontSize:9,color:"#334155",marginTop:2}}>{correct}/{n} games</div>
+                          </div>
+                          {/* Brier Skill Score */}
+                          <div style={{minWidth:80}}>
+                            <div style={{fontSize:9,color:"#475569",marginBottom:2}}>Brier Skill Score</div>
+                            <div style={{fontSize:22,fontWeight:800,color:bssCol,lineHeight:1}}>{bss!=null?bss:"—"}</div>
+                            <div style={{fontSize:9,color:"#334155",marginTop:2}}>0=random · 1=perfect</div>
+                          </div>
+                          {/* Calibration */}
+                          <div style={{minWidth:80}}>
+                            <div style={{fontSize:9,color:"#475569",marginBottom:2}}>Calibration Error</div>
+                            <div style={{fontSize:22,fontWeight:800,color:calCol,lineHeight:1}}>{calibrationErr!=null?calibrationErr:"—"}</div>
+                            <div style={{fontSize:9,color:"#334155",marginTop:2}}>pred {avgPredWinProb!=null?Math.round(avgPredWinProb*100)+"%":"—"} vs act {actualWinRate!=null?Math.round(actualWinRate*100)+"%":"—"}</div>
+                          </div>
+                          {/* Run MAE */}
+                          <div style={{minWidth:80}}>
+                            <div style={{fontSize:9,color:"#475569",marginBottom:2}}>Run MAE</div>
+                            <div style={{fontSize:22,fontWeight:800,color:runCol,lineHeight:1}}>{runMAE!=null?runMAE+"R":"—"}</div>
+                            <div style={{fontSize:9,color:"#334155",marginTop:2}}>avg runs off</div>
+                          </div>
+                          {/* Legend */}
+                          <div style={{marginLeft:"auto",fontSize:9,color:"#334155",lineHeight:1.8,alignSelf:"center"}}>
+                            <div><span style={{color:"#22c55e"}}>●</span> Good &nbsp;<span style={{color:"#f59e0b"}}>●</span> OK &nbsp;<span style={{color:"#ef4444"}}>●</span> Poor</div>
+                            <div>W/L: ≥60% good · ≥50% ok</div>
+                            <div>BSS: ≥0.10 good · ≥0 ok</div>
+                            <div>Cal: ≤0.05 good · ≤0.10 ok</div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
 
                     {/* How to read */}
                     <div style={{background:"#0f172a",borderRadius:8,padding:"10px 12px",marginBottom:12,fontSize:11,color:"#64748b",lineHeight:1.7}}>
