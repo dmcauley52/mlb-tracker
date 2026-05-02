@@ -1,0 +1,28 @@
+name: Kalshi Morning Snapshot
+
+on:
+  workflow_dispatch: {}   # allow manual trigger for testing
+
+  schedule:
+    - cron: '0 14 * * *'  # 14:00 UTC = 10 AM ET — pre-game, before most lines move
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install psycopg2-binary python-dotenv cryptography requests
+
+      - name: Log today's Kalshi disagreements (pre-game snapshot)
+        run: python fetch_kalshi_outcomes.py
+        env:
+          DATABASE_URL:      ${{ secrets.DATABASE_URL }}
+          KALSHI_API_KEY_ID: ${{ secrets.KALSHI_API_KEY_ID }}
+          KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}
