@@ -566,6 +566,10 @@
         ? +(modelHomeProb - kalshiHomeProb).toFixed(3) : null;
       // Only flag disagreement for pre-game — live prices reflect in-game state, not model inputs
       const bigDisagreement = !isLive && homeGap != null && Math.abs(homeGap) >= 0.10;
+      // Green = high confidence + disagreement (model has a strong view market doesn't share)
+      // Amber = low confidence + disagreement (model is uncertain but still differs from market)
+      const highConfidence = g.mismatch >= 0.25;
+      const disagreementColor = highConfidence ? '#22c55e' : '#f59e0b';
       const disagreementDir = homeGap > 0 ? `model favors ${g.homeAbbr} more than Kalshi`
                             : homeGap < 0 ? `Kalshi favors ${g.homeAbbr} more than model` : null;
 
@@ -628,7 +632,7 @@
 
       return (
         <div style={{background:'#1e293b',borderRadius:12,padding:16,marginBottom:10,
-          border: bigDisagreement ? '1px solid #f59e0b' : '1px solid transparent'}}>
+          border: bigDisagreement ? `1px solid ${disagreementColor}` : '1px solid transparent'}}>
           {/* Header row */}
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,flexWrap:'wrap',gap:8}}>
             <div style={{display:'flex',alignItems:'center',gap:10}}>
@@ -715,7 +719,7 @@
           {kalshi && !kalshi.error && (
             <div style={{marginTop:10,padding:'8px 12px',background:'#0f172a',borderRadius:8,
               display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',
-              border: bigDisagreement ? '1px solid rgba(245,158,11,0.4)' : 'none'}}>
+              border: bigDisagreement ? `1px solid ${disagreementColor}40` : 'none'}}>
               <span style={{fontSize:10,fontWeight:700,color:'#475569',letterSpacing:0.5,textTransform:'uppercase',flexShrink:0}}>
                 Kalshi market
               </span>
@@ -734,11 +738,11 @@
               {/* Disagreement badge */}
               {bigDisagreement && disagreementDir && (
                 <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:6,
-                  background:'rgba(245,158,11,0.15)',borderRadius:5,padding:'3px 8px'}}>
-                  <span style={{fontSize:9,color:'#f59e0b',fontWeight:700,textTransform:'uppercase',letterSpacing:0.5}}>
-                    ⚡ Model disagrees
+                  background:`${disagreementColor}20`,borderRadius:5,padding:'3px 8px'}}>
+                  <span style={{fontSize:9,color:disagreementColor,fontWeight:700,textTransform:'uppercase',letterSpacing:0.5}}>
+                    {highConfidence ? '⚡ Strong model edge' : '⚡ Model disagrees'}
                   </span>
-                  <span style={{fontSize:10,color:'#f59e0b'}}>
+                  <span style={{fontSize:10,color:disagreementColor}}>
                     {Math.abs(homeGap * 100).toFixed(0)}% gap · {disagreementDir}
                   </span>
                 </div>
@@ -917,7 +921,8 @@
             <div style={{fontSize:10,color:'#334155',padding:'4px 8px'}}>
               Confidence = how strongly the model favors one side (0% = coin flip, 100% = certain) ·
               Green border = model's pick · Est. lineup uses season avg wOBA until official lineups post ·
-              <span style={{color:'#f59e0b'}}> Amber border + ⚡ = model disagrees with Kalshi market by ≥10%</span>
+              <span style={{color:'#22c55e'}}> Green border + ⚡ = strong model edge vs Kalshi (confidence ≥25%, gap ≥10%)</span> ·
+              <span style={{color:'#f59e0b'}}> Amber border = low-confidence disagreement</span>
             </div>
           )}
         </div>
