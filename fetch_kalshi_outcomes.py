@@ -393,18 +393,15 @@ if MODE in ("morning", "pregame"):
         sig  = "strong_edge" if conf >= 0.25 else "disagreement"
 
         khp = find_kalshi_prob(home_team, away_team, today, events, mkt_by_event)
-        if khp is None:
-            continue
+        gap = round(mhp - khp, 3) if khp is not None else None
 
-        gap = round(mhp - khp, 3)
-
-        # ── MORNING: insert new row if gap exceeds threshold ───────────────
+        # ── MORNING: insert row for every game (need Vegas for all games) ──
         if MODE == "morning":
-            if abs(gap) < GAP_THRESH:
-                continue
             vhp = find_vegas_prob(home_team, away_team, vegas_odds)
-            vap = round(1 - vhp, 3) if vhp is not None else None
+            vap   = round(1 - vhp, 3) if vhp is not None else None
             vpick = ("home" if vhp >= 0.5 else "away") if vhp is not None else None
+            kap   = round(1 - khp, 3) if khp is not None else None
+            kpick = ("home" if khp >= 0.5 else "away") if khp is not None else None
             try:
                 cur.execute("""
                     INSERT INTO kalshi_tracker
@@ -416,23 +413,26 @@ if MODE in ("morning", "pregame"):
                     VALUES (%s,%s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s, %s,%s,%s, %s,%s,%s,%s)
                     ON CONFLICT (game_pk, game_date) DO UPDATE SET
                         model_home_prob  = EXCLUDED.model_home_prob,
-                        kalshi_home_prob = EXCLUDED.kalshi_home_prob,
-                        vegas_home_prob  = EXCLUDED.vegas_home_prob,
-                        vegas_away_prob  = EXCLUDED.vegas_away_prob,
-                        vegas_pick       = EXCLUDED.vegas_pick,
+                        kalshi_home_prob = COALESCE(EXCLUDED.kalshi_home_prob, kalshi_tracker.kalshi_home_prob),
+                        kalshi_away_prob = COALESCE(EXCLUDED.kalshi_away_prob, kalshi_tracker.kalshi_away_prob),
+                        kalshi_pick      = COALESCE(EXCLUDED.kalshi_pick,      kalshi_tracker.kalshi_pick),
+                        vegas_home_prob  = COALESCE(EXCLUDED.vegas_home_prob,  kalshi_tracker.vegas_home_prob),
+                        vegas_away_prob  = COALESCE(EXCLUDED.vegas_away_prob,  kalshi_tracker.vegas_away_prob),
+                        vegas_pick       = COALESCE(EXCLUDED.vegas_pick,       kalshi_tracker.vegas_pick),
                         prob_gap         = EXCLUDED.prob_gap,
                         signal_type      = EXCLUDED.signal_type,
                         lineup_source    = EXCLUDED.lineup_source
                 """, (
                     today, SEASON, home_team, away_team, game_pk,
                     mhp, round(1-mhp,3), pick, conf,
-                    khp, round(1-khp,3), "home" if khp >= 0.5 else "away",
+                    khp, kap, kpick,
                     vhp, vap, vpick,
                     gap, sig, g["lineup_source"], g["game_time_utc"],
                 ))
                 logged += 1
-                vegas_str = f"  vegas={vhp}" if vhp is not None else "  vegas=n/a"
-                print(f"  Morning: {away_team} @ {home_team}  gap={gap:+.2f}  {sig}{vegas_str}")
+                kalshi_str = f"kalshi={khp}" if khp is not None else "kalshi=n/a"
+                vegas_str  = f"vegas={vhp}"  if vhp is not None else "vegas=n/a"
+                print(f"  Morning: {away_team} @ {home_team}  {kalshi_str}  {vegas_str}")
             except Exception as e:
                 print(f"  ERR {home_team}: {e}")
 
@@ -463,13 +463,15 @@ if MODE in ("morning", "pregame"):
                         lineup_source            = %s
                     WHERE game_pk = %s AND game_date = %s
                 """, (
-                    mhp, round(1-mhp,3), khp, round(1-khp,3),
+                    mhp, round(1-mhp,3),
+                    khp, round(1-khp,3) if khp is not None else None,
                     pick, sig, g["lineup_source"],
                     game_pk, today,
                 ))
                 if cur.rowcount:
                     logged += 1
-                    print(f"  Pre-game: {away_team} @ {home_team}  model={mhp} kalshi={khp}  gap={gap:+.2f}")
+                    gap_str = f"gap={gap:+.2f}" if gap is not None else "gap=n/a"
+                    print(f"  Pre-game: {away_team} @ {home_team}  model={mhp} kalshi={khp}  {gap_str}")
             except Exception as e:
                 print(f"  ERR pregame {home_team}: {e}")
 
