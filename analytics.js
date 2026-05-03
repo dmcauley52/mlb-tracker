@@ -1299,21 +1299,42 @@ async function fetchTodayGames(roster, predCache) {
     var awaySeasonWoba = teamSeasonWoba(awayId);
 
     // Build lineup entry arrays for CycleEdge (need full player objects with predCache)
-    function lineupEntries(lineup, teamId) {
+    // For confirmed lineups: match by name. For estimated: use top-9 roster by predCache score.
+    function lineupEntries(lineup, teamId, teamName) {
       var players = rosterByTeam[teamId] || [];
+      // Fallback: match by team name string if ID lookup returned nothing
+      if (!players.length && teamName) {
+        players = (roster || []).filter(function(p) { return p.team === teamName; });
+      }
+      if (!players.length) return [];
+
       var rosterMap = {};
       players.forEach(function(p) { rosterMap[p.player_name] = p; });
-      var entries = [];
+
+      // Try name-matching from confirmed lineup entries first
+      var named = [];
       for (var i = 0; i < 9; i++) {
         var entry = lineup && lineup[i];
         var name  = entry && (entry.name || (entry.player && entry.player.player_name));
         var rp    = name && rosterMap[name];
-        entries.push(rp ? { player: rp } : null);
+        named.push(rp ? { player: rp } : null);
       }
-      return entries;
+      var namedCount = named.filter(Boolean).length;
+
+      // If fewer than 5 matched by name, fall back to top-9 by predCache score
+      if (namedCount < 5) {
+        var sorted = players
+          .filter(function(p) { return predCache[p.player_name]; })
+          .sort(function(a, b) {
+            return (predCache[b.player_name].score || 0) - (predCache[a.player_name].score || 0);
+          })
+          .slice(0, 9);
+        return sorted.map(function(p) { return { player: p }; });
+      }
+      return named;
     }
-    var homeEntries = lineupEntries(homeLineup, homeId);
-    var awayEntries = lineupEntries(awayLineup, awayId);
+    var homeEntries = lineupEntries(homeLineup, homeId, homeName);
+    var awayEntries = lineupEntries(awayLineup, awayId, awayName);
     var homeCycleEdge = computeCycleEdge(homeEntries, predCache);
     var awayCycleEdge = computeCycleEdge(awayEntries, predCache);
 
