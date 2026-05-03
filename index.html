@@ -983,13 +983,6 @@
 
       React.useEffect(() => { load(); }, [load]);
 
-      // Auto-refresh: every 2 min when any game is live, every 30 min otherwise
-      React.useEffect(() => {
-        const anyLive = games.some(g => g.state === 'Live');
-        const interval = anyLive ? 2 * 60 * 1000 : 30 * 60 * 1000;
-        const id = setInterval(load, interval);
-        return () => clearInterval(id);
-      }, [load, games]);
 
       // Load disagreement tracker from Supabase
       React.useEffect(() => {
