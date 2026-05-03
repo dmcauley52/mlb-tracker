@@ -1429,14 +1429,14 @@
                 {resolved.length > 0 && (
                   <div style={{marginTop:12}}>
                     <div style={{fontSize:9,color:'#334155',fontWeight:700,textTransform:'uppercase',letterSpacing:0.5,marginBottom:6}}>Recent</div>
-                    <div style={{display:'grid',gridTemplateColumns:'80px 1fr 55px 55px 55px 55px 55px 55px 55px',gap:0,
+                    <div style={{display:'grid',gridTemplateColumns:'80px 1fr 55px 55px 65px 65px 65px 65px 65px',gap:0,
                       padding:'4px 8px',fontSize:9,color:'#475569',fontWeight:700,borderBottom:'1px solid #0f172a'}}>
                       <span>Date</span><span>Game</span>
                       <span style={{textAlign:'center'}}>AM Gap</span>
                       <span style={{textAlign:'center'}}>Pre-game</span>
-                      <span style={{textAlign:'center'}}>Model</span>
-                      <span style={{textAlign:'center'}}>Kalshi</span>
-                      <span style={{textAlign:'center'}}>Cycle</span>
+                      <span style={{textAlign:'center',color:'#3b82f6'}}>Model</span>
+                      <span style={{textAlign:'center',color:'#f59e0b'}}>Kalshi</span>
+                      <span style={{textAlign:'center',color:'#6366f1'}}>Cycle</span>
                       <span style={{textAlign:'center',color:'#10b981'}}>Vegas</span>
                       <span style={{textAlign:'center'}}>Result</span>
                     </div>
@@ -1444,8 +1444,29 @@
                       const kalshiMoved = r.pregame_kalshi_home_prob != null;
                       const pgGap = kalshiMoved && r.pregame_model_home_prob != null
                         ? +(r.pregame_model_home_prob - r.pregame_kalshi_home_prob).toFixed(2) : null;
+                      const shortName = t => t?.split(' ').pop() ?? '—';
+                      const pickCell = (pick, correct, prob, color) => (
+                        <div style={{textAlign:'center'}}>
+                          <div style={{fontSize:10,fontWeight:600,color:color||'#94a3b8'}}>{shortName(pick)}</div>
+                          {prob != null && <div style={{fontSize:8,color:'#475569'}}>{Math.round(prob*100)}%</div>}
+                          <div style={{fontSize:12,color:correct===true?'#22c55e':correct===false?'#ef4444':'#334155'}}>
+                            {correct===true?'✓':correct===false?'✗':'—'}
+                          </div>
+                        </div>
+                      );
+                      const modelProb = r.pregame_model_home_prob != null
+                        ? (r.model_pick === r.home_team ? parseFloat(r.pregame_model_home_prob) : 1 - parseFloat(r.pregame_model_home_prob))
+                        : null;
+                      const kalshiProb = r.pregame_kalshi_home_prob != null
+                        ? (r.kalshi_pick === r.home_team ? parseFloat(r.pregame_kalshi_home_prob) : 1 - parseFloat(r.pregame_kalshi_home_prob))
+                        : (r.kalshi_home_prob != null
+                          ? (r.kalshi_pick === r.home_team ? parseFloat(r.kalshi_home_prob) : parseFloat(r.kalshi_away_prob))
+                          : null);
+                      const vegasProb = r.vegas_home_prob != null
+                        ? (r.vegas_pick === r.home_team ? parseFloat(r.vegas_home_prob) : 1 - parseFloat(r.vegas_home_prob))
+                        : null;
                       return (
-                        <div key={i} style={{display:'grid',gridTemplateColumns:'80px 1fr 55px 55px 55px 55px 55px 55px 55px',
+                        <div key={i} style={{display:'grid',gridTemplateColumns:'80px 1fr 55px 55px 65px 65px 65px 65px 65px',
                           gap:0,padding:'5px 8px',fontSize:10,borderBottom:'1px solid #0f172a',
                           background:i%2===0?'rgba(15,23,42,0.4)':'transparent',alignItems:'center'}}>
                           <span style={{color:'#475569'}}>{r.game_date}</span>
@@ -1459,11 +1480,11 @@
                           <span style={{textAlign:'center',color:pgGap!=null?(r.pregame_signal_type==='strong_edge'?'#22c55e':'#f59e0b'):'#334155',fontSize:9}}>
                             {pgGap!=null ? `${pgGap>0?'+':''}${Math.round(pgGap*100)}%` : '—'}
                           </span>
-                          <span style={{textAlign:'center',fontSize:13}}>{r.model_correct===true?'✓':r.model_correct===false?'✗':'—'}</span>
-                          <span style={{textAlign:'center',fontSize:13}}>{r.kalshi_correct===true?'✓':r.kalshi_correct===false?'✗':'—'}</span>
-                          <span style={{textAlign:'center',fontSize:13}}>{r.cycle_correct===true?'✓':r.cycle_correct===false?'✗':'—'}</span>
-                          <span style={{textAlign:'center',fontSize:13,color:'#10b981'}}>{r.vegas_correct===true?'✓':r.vegas_correct===false?'✗':'—'}</span>
-                          <span style={{textAlign:'center',color:'#64748b'}}>{r.actual_winner||'—'}</span>
+                          {pickCell(r.model_pick,  r.model_correct,  modelProb,  '#3b82f6')}
+                          {pickCell(r.kalshi_pick, r.kalshi_correct, kalshiProb, '#f59e0b')}
+                          {pickCell(r.cycle_pick,  r.cycle_correct,  null,       '#6366f1')}
+                          {pickCell(r.vegas_pick,  r.vegas_correct,  vegasProb,  '#10b981')}
+                          <span style={{textAlign:'center',color:'#64748b'}}>{r.actual_winner ? shortName(r.actual_winner) : '—'}</span>
                         </div>
                       );
                     })}

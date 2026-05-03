@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git push *)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "powershell",
+            "command": "$json = $input -join ''; $f = ($json | ConvertFrom-Json).tool_input.file_path; if ($f -like '*index.html') { git add index.html; git commit -m 'Auto-push index.html changes'; git push } 2>$null",
+            "statusMessage": "Pushing index.html…"
+          }
+        ]
+      }
+    ]
+  }
+}
