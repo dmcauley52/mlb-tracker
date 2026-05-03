@@ -557,21 +557,74 @@
 
       const mPct = Math.round(g.mismatch * 100);
 
-      // Kalshi disagreement: our model home win% vs Kalshi implied home win%
       const isLive = g.state === 'Live';
+      const modelHomeProb  = g.home?.winProb ?? null;
       const kalshiHomeProb = kalshi?.homeWinProb ?? null;
       const kalshiAwayProb = kalshi?.awayWinProb ?? null;
-      const modelHomeProb  = g.home?.winProb ?? null;
+
+      // ── Edge Meter computation ─────────────────────────────────────────────
+      // Score 0–4: how many independent signals agree on the same favorite
+      // Then compute the market gap (Kalshi or Vegas vs model) to size the edge
+      const modelFav   = g.favorite; // 'home' | 'away'
+      const vegasHomeP = vegas?.home_prob ?? null;
+      const vegasFav   = vegasHomeP != null ? (vegasHomeP >= 0.5 ? 'home' : 'away') : null;
+      const ceFav      = g.cycleEdge?.favorite ?? null;
+      // Kalshi favorite from implied probs
+      const kalshiFav  = kalshiHomeProb != null
+        ? (kalshiHomeProb >= 0.5 ? 'home' : 'away') : null;
+
+      // Signals that exist (have data) and their agreement with modelFav
+      const signals = [
+        { key: 'Model',     fav: modelFav,  always: true },
+        { key: 'Cycle',     fav: ceFav,     always: false },
+        { key: 'Vegas',     fav: vegasFav,  always: false },
+        { key: 'Kalshi',    fav: kalshiFav, always: false },
+      ].filter(s => s.fav != null);
+
+      const signalCount   = signals.length;
+      const agreeCount    = signals.filter(s => s.fav === modelFav).length;
+      // Edge team = team most signals point to
+      const edgeFav       = modelFav; // model is anchor; agreement bolsters it
+      const edgeTeamAbbr  = edgeFav === 'home' ? g.homeAbbr : g.awayAbbr;
+
+      // Market gap: biggest gap between model and any market source (Kalshi preferred, Vegas fallback)
       const homeGap = (kalshiHomeProb != null && modelHomeProb != null)
         ? +(modelHomeProb - kalshiHomeProb).toFixed(3) : null;
-      // Only flag disagreement for pre-game — live prices reflect in-game state, not model inputs
-      const bigDisagreement = !isLive && homeGap != null && Math.abs(homeGap) >= 0.10;
-      // Green = high confidence + disagreement (model has a strong view market doesn't share)
-      // Amber = low confidence + disagreement (model is uncertain but still differs from market)
-      const highConfidence = g.mismatch >= 0.25;
-      const disagreementColor = highConfidence ? '#22c55e' : '#f59e0b';
-      const disagreementDir = homeGap > 0 ? `model favors ${g.homeAbbr} more than Kalshi`
-                            : homeGap < 0 ? `Kalshi favors ${g.homeAbbr} more than model` : null;
+      const vegasGap = (vegasHomeP != null && modelHomeProb != null)
+        ? +(modelHomeProb - vegasHomeP).toFixed(3) : null;
+      // Use whichever gap is available; Kalshi preferred
+      const bestGap = homeGap ?? vegasGap;
+      const gapPct  = bestGap != null ? Math.abs(bestGap * 100) : 0;
+
+      // Edge strength classification
+      // Strong: 3+ signals agree AND gap ≥ 10pp  OR  all 4 agree
+      // Moderate: 2+ agree AND gap ≥ 8pp
+      // Weak: otherwise
+      const edgeStrength = (() => {
+        if (isLive) return 'live';
+        if (agreeCount >= 3 && gapPct >= 10) return 'strong';
+        if (agreeCount === signalCount && signalCount >= 3) return 'strong';
+        if (agreeCount >= 2 && gapPct >= 8) return 'moderate';
+        if (agreeCount >= 2) return 'watch';
+        return 'none';
+      })();
+
+      const edgeColors = {
+        strong:   { border: '#22c55e', badge: '#22c55e', bg: 'rgba(34,197,94,0.08)'   },
+        moderate: { border: '#f59e0b', badge: '#f59e0b', bg: 'rgba(245,158,11,0.08)'  },
+        watch:    { border: '#6366f1', badge: '#6366f1', bg: 'rgba(99,102,241,0.06)'  },
+        live:     { border: '#475569', badge: '#475569', bg: 'transparent'             },
+        none:     { border: 'transparent', badge: '#475569', bg: 'transparent'         },
+      };
+      const ec = edgeColors[edgeStrength];
+
+      const edgeBadgeLabel = {
+        strong:   `🎯 STRONG EDGE: ${edgeTeamAbbr}`,
+        moderate: `⚡ EDGE: ${edgeTeamAbbr}`,
+        watch:    `👀 WATCH: ${edgeTeamAbbr}`,
+        live:     '🔴 LIVE',
+        none:     '',
+      }[edgeStrength];
 
       const LineupPanel = ({title, lineup, sp, spEra, accentColor}) => {
         const l10wins = null; // not available in today's context
@@ -632,7 +685,7 @@
 
       return (
         <div style={{background:'#1e293b',borderRadius:12,padding:16,marginBottom:10,
-          border: bigDisagreement ? `1px solid ${disagreementColor}` : '1px solid transparent'}}>
+          border: `1px solid ${ec.border}`}}>
           {/* Header row */}
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,flexWrap:'wrap',gap:8}}>
             <div style={{display:'flex',alignItems:'center',gap:10}}>
@@ -715,111 +768,139 @@
             </div>
           </div>
 
-          {/* Kalshi market odds row */}
-          {kalshi && !kalshi.error && (
-            <div style={{marginTop:10,padding:'8px 12px',background:'#0f172a',borderRadius:8,
-              display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',
-              border: bigDisagreement ? `1px solid ${disagreementColor}40` : 'none'}}>
-              <span style={{fontSize:10,fontWeight:700,color:'#475569',letterSpacing:0.5,textTransform:'uppercase',flexShrink:0}}>
-                Kalshi market
-              </span>
-              {isLive && <span style={{fontSize:9,fontWeight:700,color:'#22c55e',background:'rgba(34,197,94,0.1)',padding:'1px 6px',borderRadius:3}}>LIVE · prices update in-game</span>}
-              {/* Away odds */}
-              <div style={{display:'flex',alignItems:'center',gap:5}}>
-                <span style={{fontSize:11,color:'#94a3b8'}}>{g.awayAbbr}</span>
-                <span style={{fontSize:15,fontWeight:800,color:winColor(kalshiAwayProb)}}>{fmtPct(kalshiAwayProb)}</span>
-              </div>
-              <span style={{color:'#334155',fontSize:11}}>vs</span>
-              {/* Home odds */}
-              <div style={{display:'flex',alignItems:'center',gap:5}}>
-                <span style={{fontSize:11,color:'#94a3b8'}}>{g.homeAbbr}</span>
-                <span style={{fontSize:15,fontWeight:800,color:winColor(kalshiHomeProb)}}>{fmtPct(kalshiHomeProb)}</span>
-              </div>
-              {/* Disagreement badge */}
-              {bigDisagreement && disagreementDir && (
-                <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:6,
-                  background:`${disagreementColor}20`,borderRadius:5,padding:'3px 8px'}}>
-                  <span style={{fontSize:9,color:disagreementColor,fontWeight:700,textTransform:'uppercase',letterSpacing:0.5}}>
-                    {highConfidence ? '⚡ Strong model edge' : '⚡ Model disagrees'}
-                  </span>
-                  <span style={{fontSize:10,color:disagreementColor}}>
-                    {Math.abs(homeGap * 100).toFixed(0)}% gap · {disagreementDir}
-                  </span>
-                </div>
-              )}
-              {!bigDisagreement && homeGap != null && (
-                <span style={{marginLeft:'auto',fontSize:9,color:'#334155'}}>
-                  model vs market gap: {homeGap > 0 ? '+' : ''}{(homeGap*100).toFixed(0)}%
-                </span>
-              )}
-            </div>
-          )}
-
-          {/* CycleEdge row */}
-          {g.cycleEdge?.home && g.cycleEdge?.away && (()=>{
-            const ce = g.cycleEdge;
+          {/* ── Edge Meter ──────────────────────────────────────────────────── */}
+          {(()=>{
             const ceColor = s => s>=65?'#22c55e':s>=50?'#f59e0b':'#ef4444';
-            const awayAgrees  = (ce.favorite==='away') === (g.favorite==='away');
-            const homeAgrees  = (ce.favorite==='home') === (g.favorite==='home');
-            const bothAgree   = ce.favorite === g.favorite;
-            const borderColor = bothAgree ? 'rgba(99,102,241,0.3)' : 'rgba(245,158,11,0.3)';
-            return (
-              <div style={{marginTop:6,padding:'8px 12px',background:'#0f172a',borderRadius:8,
-                display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',
-                border:`1px solid ${borderColor}`}}>
-                <span style={{fontSize:10,fontWeight:700,color:'#6366f1',letterSpacing:0.5,textTransform:'uppercase',flexShrink:0}}>
-                  Cycle Edge
-                </span>
-                {/* Away */}
-                <div style={{display:'flex',alignItems:'center',gap:5}}>
-                  <span style={{fontSize:11,color:'#94a3b8'}}>{g.awayAbbr}</span>
-                  <span style={{fontSize:15,fontWeight:800,color:ceColor(ce.away.score)}}>{ce.away.score}</span>
-                  <span style={{fontSize:9,color:'#475569'}}>{ce.away.hotCount}/{ce.away.totalCount} hot</span>
-                  {ce.awayProb!=null&&<span style={{fontSize:11,color:ceColor(ce.away.score)}}>{Math.round(ce.awayProb*100)}%</span>}
-                </div>
-                <span style={{color:'#334155',fontSize:11}}>vs</span>
-                {/* Home */}
-                <div style={{display:'flex',alignItems:'center',gap:5}}>
-                  <span style={{fontSize:11,color:'#94a3b8'}}>{g.homeAbbr}</span>
-                  <span style={{fontSize:15,fontWeight:800,color:ceColor(ce.home.score)}}>{ce.home.score}</span>
-                  <span style={{fontSize:9,color:'#475569'}}>{ce.home.hotCount}/{ce.home.totalCount} hot</span>
-                  {ce.homeProb!=null&&<span style={{fontSize:11,color:ceColor(ce.home.score)}}>{Math.round(ce.homeProb*100)}%</span>}
-                </div>
-                {/* Agreement indicator */}
-                <span style={{marginLeft:'auto',fontSize:9,color: bothAgree?'#6366f1':'#f59e0b'}}>
-                  {bothAgree ? '✓ agrees with model' : '⚡ cycle pick differs from model'}
-                </span>
-              </div>
-            );
-          })()}
+            const ce = g.cycleEdge;
+            // Per-signal rows: label | away% | home% | agree icon
+            const sigRows = [];
+            // Model row always shown
+            sigRows.push({
+              label:'Model', labelColor:'#3b82f6',
+              awayPct: g.away?.winProb, homePct: g.home?.winProb,
+              fav: modelFav, agrees: true,
+            });
+            // Cycle row
+            if (ce?.home && ce?.away) sigRows.push({
+              label:'Cycle', labelColor:'#6366f1',
+              awayPct: ce.awayProb, homePct: ce.homeProb,
+              fav: ceFav, agrees: ceFav === modelFav,
+              extra: `${ce.away.score}/${ce.home.score}`,
+            });
+            // Vegas row
+            if (vegasHomeP != null) sigRows.push({
+              label:'Vegas', labelColor:'#10b981',
+              awayPct: 1 - vegasHomeP, homePct: vegasHomeP,
+              fav: vegasFav, agrees: vegasFav === modelFav,
+            });
+            // Kalshi row
+            if (kalshi && !kalshi.error && kalshiHomeProb != null) sigRows.push({
+              label:'Kalshi', labelColor:'#f59e0b',
+              awayPct: kalshiAwayProb, homePct: kalshiHomeProb,
+              fav: kalshiFav, agrees: kalshiFav === modelFav,
+              live: isLive,
+            });
 
-          {/* Vegas odds row */}
-          {vegas?.home_prob != null && (()=>{
-            const vegasHomeProb = vegas.home_prob;
-            const vegasAwayProb = Math.round((1 - vegasHomeProb) * 1000) / 1000;
-            const vegasFav = vegasHomeProb >= 0.5 ? 'home' : 'away';
-            const modelFav = g.favorite;
-            const agrees = vegasFav === modelFav;
-            const borderColor = agrees ? 'rgba(16,185,129,0.3)' : 'rgba(245,158,11,0.3)';
+            const filledDots = agreeCount;
+            const totalDots  = Math.max(signalCount, 1);
+
             return (
-              <div style={{marginTop:6,padding:'8px 12px',background:'#0f172a',borderRadius:8,
-                display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',
-                border:`1px solid ${borderColor}`}}>
-                <span style={{fontSize:10,fontWeight:700,color:'#10b981',letterSpacing:0.5,textTransform:'uppercase',flexShrink:0}}>
-                  Vegas (DK)
-                </span>
-                <div style={{display:'flex',alignItems:'center',gap:5}}>
-                  <span style={{fontSize:11,color:'#94a3b8'}}>{g.awayAbbr}</span>
-                  <span style={{fontSize:15,fontWeight:800,color:winColor(vegasAwayProb)}}>{fmtPct(vegasAwayProb)}</span>
+              <div style={{marginTop:10,background:ec.bg,borderRadius:8,padding:'10px 14px',
+                border:`1px solid ${ec.border}30`}}>
+                {/* Header */}
+                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8,flexWrap:'wrap',gap:6}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8}}>
+                    <span style={{fontSize:10,fontWeight:700,color:'#475569',letterSpacing:0.8,textTransform:'uppercase'}}>
+                      Edge Meter
+                    </span>
+                    {/* Signal dots */}
+                    <div style={{display:'flex',gap:3}}>
+                      {Array.from({length: totalDots}).map((_,i) => (
+                        <div key={i} style={{width:8,height:8,borderRadius:'50%',
+                          background: i < filledDots ? ec.badge : '#1e293b',
+                          border:`1px solid ${i < filledDots ? ec.badge : '#334155'}`}} />
+                      ))}
+                    </div>
+                    <span style={{fontSize:10,color:'#475569'}}>{agreeCount}/{signalCount} signals agree</span>
+                  </div>
+                  {/* Edge badge */}
+                  {edgeStrength !== 'none' && edgeBadgeLabel && (
+                    <span style={{fontSize:11,fontWeight:800,color:ec.badge,
+                      background:`${ec.badge}18`,borderRadius:5,padding:'3px 10px',letterSpacing:0.3}}>
+                      {edgeBadgeLabel}
+                    </span>
+                  )}
                 </div>
-                <span style={{color:'#334155',fontSize:11}}>vs</span>
-                <div style={{display:'flex',alignItems:'center',gap:5}}>
-                  <span style={{fontSize:11,color:'#94a3b8'}}>{g.homeAbbr}</span>
-                  <span style={{fontSize:15,fontWeight:800,color:winColor(vegasHomeProb)}}>{fmtPct(vegasHomeProb)}</span>
+
+                {/* Signal table */}
+                <div style={{display:'grid',gridTemplateColumns:'52px 1fr 28px 1fr 20px',gap:'3px 6px',alignItems:'center'}}>
+                  {/* Column headers */}
+                  <div/>
+                  <div style={{fontSize:9,color:'#334155',fontWeight:700,textAlign:'center',textTransform:'uppercase',letterSpacing:0.5}}>{g.awayAbbr}</div>
+                  <div/>
+                  <div style={{fontSize:9,color:'#334155',fontWeight:700,textAlign:'center',textTransform:'uppercase',letterSpacing:0.5}}>{g.homeAbbr}</div>
+                  <div/>
+                  {sigRows.map(row => {
+                    const awayIsFav = row.fav === 'away';
+                    const homeIsFav = row.fav === 'home';
+                    return (
+                      <React.Fragment key={row.label}>
+                        {/* Source label */}
+                        <div style={{display:'flex',alignItems:'center',gap:4}}>
+                          <span style={{fontSize:10,fontWeight:700,color:row.labelColor,letterSpacing:0.3}}>
+                            {row.label}
+                          </span>
+                          {row.live && <span style={{fontSize:8,color:'#22c55e',fontWeight:700}}>LIVE</span>}
+                        </div>
+                        {/* Away % */}
+                        <div style={{textAlign:'center',padding:'2px 0',
+                          background: awayIsFav ? `${row.labelColor}18` : 'transparent',
+                          borderRadius:4}}>
+                          <span style={{fontSize:13,fontWeight: awayIsFav?800:600,
+                            color: awayIsFav ? row.labelColor : '#64748b'}}>
+                            {row.awayPct != null ? Math.round(row.awayPct*100)+'%' : '—'}
+                          </span>
+                        </div>
+                        {/* VS */}
+                        <div style={{textAlign:'center',fontSize:9,color:'#334155'}}>vs</div>
+                        {/* Home % */}
+                        <div style={{textAlign:'center',padding:'2px 0',
+                          background: homeIsFav ? `${row.labelColor}18` : 'transparent',
+                          borderRadius:4}}>
+                          <span style={{fontSize:13,fontWeight: homeIsFav?800:600,
+                            color: homeIsFav ? row.labelColor : '#64748b'}}>
+                            {row.homePct != null ? Math.round(row.homePct*100)+'%' : '—'}
+                          </span>
+                        </div>
+                        {/* Agree icon */}
+                        <div style={{textAlign:'center',fontSize:12}}>
+                          {row.agrees
+                            ? <span style={{color:'#22c55e'}} title="Agrees with model">✓</span>
+                            : <span style={{color:'#f59e0b'}} title="Differs from model">✗</span>}
+                        </div>
+                      </React.Fragment>
+                    );
+                  })}
                 </div>
-                <span style={{marginLeft:'auto',fontSize:9,color:agrees?'#10b981':'#f59e0b'}}>
-                  {agrees ? '✓ agrees with model' : '⚡ Vegas pick differs from model'}
-                </span>
+
+                {/* Market gap summary */}
+                {bestGap != null && !isLive && (
+                  <div style={{marginTop:8,paddingTop:6,borderTop:'1px solid #1e293b',
+                    display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                    <span style={{fontSize:9,color:'#475569',textTransform:'uppercase',letterSpacing:0.5}}>Market gap</span>
+                    <span style={{fontSize:12,fontWeight:700,color: gapPct >= 10 ? ec.badge : '#64748b'}}>
+                      {bestGap > 0 ? '+' : ''}{(bestGap*100).toFixed(0)}pp
+                    </span>
+                    <span style={{fontSize:9,color:'#475569'}}>
+                      model {bestGap > 0 ? `favors ${g.homeAbbr}` : `favors ${g.awayAbbr}`} more than market
+                    </span>
+                    {homeGap != null && vegasGap != null && (
+                      <span style={{fontSize:9,color:'#334155',marginLeft:'auto'}}>
+                        Kalshi {homeGap>0?'+':''}{(homeGap*100).toFixed(0)}pp · Vegas {vegasGap>0?'+':''}{(vegasGap*100).toFixed(0)}pp
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })()}
