@@ -1140,28 +1140,43 @@
             </div>
           )}
 
-          {/* ── Disagreement Tracker ── */}
-          {(()=>{
-            const resolved = tracker.filter(r => r.actual_winner);
-            const strong   = resolved.filter(r => r.signal_type === 'strong_edge');
-            const weak     = resolved.filter(r => r.signal_type === 'disagreement');
-            const pct = (arr, key) => arr.length ? Math.round(arr.filter(r=>r[key]).length/arr.length*100) : null;
-            const statCell = (label, val, sub, color) => (
-              <div style={{textAlign:'center',minWidth:60}}>
-                <div style={{fontSize:20,fontWeight:800,color:color||'#94a3b8',lineHeight:1}}>{val!=null?val+'%':'—'}</div>
-                <div style={{fontSize:9,color:'#475569',marginTop:1}}>{label}</div>
-                {sub&&<div style={{fontSize:8,color:'#334155'}}>{sub}</div>}
-              </div>
-            );
-            const col = v => v==null?'#475569':v>=60?'#22c55e':v>=50?'#f59e0b':'#ef4444';
-            return (
-              <div style={{background:'#1e293b',borderRadius:12,padding:16,marginTop:16}}>
-                <div style={{fontWeight:700,fontSize:13,color:'#f1f5f9',marginBottom:4}}>
-                  Model vs Kalshi — Disagreement Tracker
-                </div>
-                <div style={{fontSize:11,color:'#475569',marginBottom:14}}>
-                  Tracks flagged games (≥10% gap) · outcomes filled next day · {resolved.length} resolved so far
-                </div>
+          {/* ── Disagreement Tracker is now its own tab ── */}
+        </div>
+      );
+    }
+
+    // ── Disagreement Tracker Tab ──────────────────────────────────────────────
+    function DisagreementTrackerTab({sbUrl, sbKey}) {
+      const [tracker, setTracker] = React.useState([]);
+
+      React.useEffect(() => {
+        if (!sbUrl || !sbKey) return;
+        sbFetch(sbUrl, sbKey,
+          `kalshi_tracker?select=game_pk,game_date,home_team,away_team,model_pick,kalshi_pick,cycle_pick,vegas_pick,prob_gap,signal_type,model_confidence,model_correct,kalshi_correct,cycle_correct,vegas_correct,actual_winner,pregame_model_home_prob,pregame_kalshi_home_prob,pregame_signal_type,lineup_source,vegas_home_prob,kalshi_home_prob,kalshi_away_prob&order=game_date.desc&limit=100`
+        ).then(rows => { if (rows?.length) setTracker(rows); }).catch(() => {});
+      }, [sbUrl, sbKey]);
+
+      const resolved = tracker.filter(r => r.actual_winner);
+      const strong   = resolved.filter(r => r.signal_type === 'strong_edge');
+      const weak     = resolved.filter(r => r.signal_type === 'disagreement');
+      const pct = (arr, key) => arr.length ? Math.round(arr.filter(r=>r[key]).length/arr.length*100) : null;
+      const statCell = (label, val, sub, color) => (
+        <div style={{textAlign:'center',minWidth:60}}>
+          <div style={{fontSize:20,fontWeight:800,color:color||'#94a3b8',lineHeight:1}}>{val!=null?val+'%':'—'}</div>
+          <div style={{fontSize:9,color:'#475569',marginTop:1}}>{label}</div>
+          {sub&&<div style={{fontSize:8,color:'#334155'}}>{sub}</div>}
+        </div>
+      );
+      const col = v => v==null?'#475569':v>=60?'#22c55e':v>=50?'#f59e0b':'#ef4444';
+
+      return (
+        <div style={{background:'#1e293b',borderRadius:12,padding:16,marginTop:16}}>
+          <div style={{fontWeight:700,fontSize:13,color:'#f1f5f9',marginBottom:4}}>
+            Model vs Kalshi — Disagreement Tracker
+          </div>
+          <div style={{fontSize:11,color:'#475569',marginBottom:14}}>
+            Tracks flagged games (≥10% gap) · outcomes filled next day · {resolved.length} resolved so far
+          </div>
 
                 {resolved.length === 0 && (
                   <div style={{color:'#475569',fontSize:12,padding:'12px 0'}}>
@@ -1455,9 +1470,6 @@
                   </div>
                 )}
               </div>
-            );
-          })()}
-        </div>
       );
     }
 
@@ -2820,7 +2832,7 @@ Based specifically on the detected cycle periods and forecast direction above �
 
             {/* ── Main tab bar: Hitters / Pitchers ── */}
             <div style={{display:"flex",gap:4,marginBottom:16,borderBottom:"1px solid #334155",paddingBottom:0}}>
-              {[["hitters","🏏 Hitters"],["pitchers","⚾ Pitchers"],["gameplan","📋 Game Predictions"],["predacc","🎯 Prediction Accuracy"],["todaygames","⚡ Today's Games"]].map(([tab,label])=>(
+              {[["hitters","🏏 Hitters"],["pitchers","⚾ Pitchers"],["gameplan","📋 Game Predictions"],["predacc","🎯 Prediction Accuracy"],["todaygames","⚡ Today's Games"],["disagree","📊 Disagreement Tracker"]].map(([tab,label])=>(
                 <button key={tab} onClick={()=>setMainTab(tab)}
                   style={{padding:"9px 20px",borderRadius:"8px 8px 0 0",border:"none",cursor:"pointer",fontWeight:700,fontSize:13,
                     background:mainTab===tab?"#1e293b":"transparent",
@@ -2845,6 +2857,11 @@ Based specifically on the detected cycle periods and forecast direction above �
             {/* ── TODAY'S GAMES TAB ── */}
             {mainTab === "todaygames" && (
               <TodayMatchupsTab roster={roster} predCache={predCache} sbUrl={sbUrl} sbKey={sbKey}/>
+            )}
+
+            {/* ── DISAGREEMENT TRACKER TAB ── */}
+            {mainTab === "disagree" && (
+              <DisagreementTrackerTab sbUrl={sbUrl} sbKey={sbKey}/>
             )}
 
             {/* ── PITCHERS TAB ── */}
