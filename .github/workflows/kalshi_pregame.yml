@@ -1,0 +1,41 @@
+name: Kalshi Pre-game Lineup Snapshot
+
+on:
+  workflow_dispatch: {}   # manual trigger for testing
+
+  schedule:
+    # Run every hour 16:00-02:00 UTC (noon-10 PM ET)
+    # Checks for games starting in next 90 min with confirmed lineups
+    - cron: '0 16 * * *'
+    - cron: '0 17 * * *'
+    - cron: '0 18 * * *'
+    - cron: '0 19 * * *'
+    - cron: '0 20 * * *'
+    - cron: '0 21 * * *'
+    - cron: '0 22 * * *'
+    - cron: '0 23 * * *'
+    - cron: '0 0  * * *'
+    - cron: '0 1  * * *'
+    - cron: '0 2  * * *'
+
+jobs:
+  pregame:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install psycopg2-binary python-dotenv cryptography requests
+
+      - name: Update pre-game snapshot for games starting soon
+        run: python fetch_kalshi_outcomes.py
+        env:
+          MODE:              pregame
+          DATABASE_URL:      ${{ secrets.DATABASE_URL }}
+          KALSHI_API_KEY_ID: ${{ secrets.KALSHI_API_KEY_ID }}
+          KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}

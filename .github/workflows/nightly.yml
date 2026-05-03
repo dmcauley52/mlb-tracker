@@ -120,12 +120,13 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DAYS: 21
 
-      - name: Nightly Kalshi tracker (log disagreements + fill outcomes)
+      - name: Nightly Kalshi tracker (fill outcomes only)
         if: >
           github.event.inputs.mode == 'nightly' ||
           github.event.inputs.mode == ''
         run: python fetch_kalshi_outcomes.py
         env:
+          MODE: outcomes
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           KALSHI_API_KEY_ID: ${{ secrets.KALSHI_API_KEY_ID }}
           KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}

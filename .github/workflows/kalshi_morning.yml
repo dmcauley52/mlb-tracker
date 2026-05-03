@@ -20,9 +20,10 @@ jobs:
       - name: Install dependencies
         run: pip install psycopg2-binary python-dotenv cryptography requests
 
-      - name: Log today's Kalshi disagreements (pre-game snapshot)
+      - name: Log today's Kalshi disagreements (morning snapshot)
         run: python fetch_kalshi_outcomes.py
         env:
+          MODE:              morning
           DATABASE_URL:      ${{ secrets.DATABASE_URL }}
           KALSHI_API_KEY_ID: ${{ secrets.KALSHI_API_KEY_ID }}
           KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}

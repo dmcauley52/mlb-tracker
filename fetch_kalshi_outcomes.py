@@ -1,33 +1,51 @@
 """
 fetch_kalshi_outcomes.py
-Two jobs in one:
-  1. Fill in actual outcomes for yesterday's logged disagreements
-  2. Log new disagreements from today's backtest_results vs Kalshi market prices
+Three modes via MODE env var:
+  morning  (default) -- log today's disagreements with pre-game Kalshi prices
+  pregame            -- update rows for games starting in next 90 min with confirmed lineups
+  outcomes           -- fill actual outcomes for yesterday's logged rows
 
-Run nightly AFTER fetch_backtest_cache.py.
-Usage: python fetch_kalshi_outcomes.py
+Schedules:
+  kalshi_morning.yml  14:00 UTC (10 AM ET)      -- MODE=morning
+  kalshi_pregame.yml  hourly 16:00-02:00 UTC    -- MODE=pregame
+  nightly.yml         09:00 UTC (5 AM ET)       -- MODE=outcomes
 """
-import psycopg2, os, json, math, time, hmac, hashlib, base64, requests
-from datetime import date, timedelta
+import psycopg2, os, math, time, base64, requests
+from datetime import date, datetime, timedelta, timezone
 from dotenv import load_dotenv
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
 from cryptography.hazmat.backends import default_backend
 
 load_dotenv()
 
+MODE        = os.getenv("MODE", "morning")
 SEASON      = 2026
-GAP_THRESH  = 0.10   # min gap to log
+GAP_THRESH  = 0.10
 KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
 MONTHS      = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"]
+LEAGUE_AVG_ERA  = 4.20
+WOBA_RUN_SCALE  = 17.0
+MAX_RUNS        = 7.5
 
 # ── Kalshi auth ────────────────────────────────────────────────────────────
+def _load_private_key():
+    key_pem = os.getenv("KALSHI_PRIVATE_KEY", "")
+    if "\\n" in key_pem:
+        key_pem = key_pem.replace("\\n", "\n")
+    if len(key_pem) < 100:
+        try:
+            with open("kalshi_private.pem") as f:
+                key_pem = f.read()
+        except FileNotFoundError:
+            pass
+    return serialization.load_pem_private_key(key_pem.encode(), password=None, backend=default_backend())
+
 def kalshi_headers(method, path):
-    key_pem = os.getenv("KALSHI_PRIVATE_KEY", "").replace("\\n", "\n")
-    private_key = serialization.load_pem_private_key(key_pem.encode(), password=None, backend=default_backend())
+    private_key = _load_private_key()
     ts  = str(int(time.time() * 1000))
     msg = f"{ts}{method.upper()}/trade-api/v2{path}".encode()
-    sig = private_key.sign(msg, padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=32), hashes.SHA256())
+    sig = private_key.sign(msg, asym_padding.PSS(mgf=asym_padding.MGF1(hashes.SHA256()), salt_length=32), hashes.SHA256())
     return {
         "Content-Type":            "application/json",
         "KALSHI-ACCESS-KEY":       os.getenv("KALSHI_API_KEY_ID", ""),
@@ -45,118 +63,11 @@ conn = psycopg2.connect(os.getenv("DATABASE_URL"))
 cur  = conn.cursor()
 today     = date.today()
 yesterday = today - timedelta(days=1)
+now_utc   = datetime.now(timezone.utc)
 
-# ── Job 1: Fill outcomes for yesterday's logged rows ──────────────────────
-print("Job 1: filling outcomes for yesterday's games...")
-cur.execute("""
-    SELECT id, game_pk, home_team, away_team, model_pick, kalshi_pick, cycle_pick
-    FROM kalshi_tracker
-    WHERE game_date = %s AND actual_winner IS NULL AND game_pk IS NOT NULL
-""", (yesterday,))
-pending = cur.fetchall()
-print(f"  {len(pending)} rows need outcomes")
+print(f"Mode: {MODE}  Date: {today}")
 
-for row_id, game_pk, home_team, away_team, model_pick, kalshi_pick, cycle_pick in pending:
-    try:
-        r = requests.get(f"https://statsapi.mlb.com/api/v1/game/{game_pk}/linescore")
-        d = r.json()
-        home_score = d.get("teams", {}).get("home", {}).get("runs")
-        away_score = d.get("teams", {}).get("away", {}).get("runs")
-        if home_score is None or away_score is None:
-            continue
-        actual_winner = "home" if home_score > away_score else "away"
-        cur.execute("""
-            UPDATE kalshi_tracker SET
-                actual_winner  = %s,
-                model_correct  = %s,
-                kalshi_correct = %s,
-                cycle_correct  = %s
-            WHERE id = %s
-        """, (
-            actual_winner,
-            model_pick  == actual_winner if model_pick  else None,
-            kalshi_pick == actual_winner if kalshi_pick else None,
-            cycle_pick  == actual_winner if cycle_pick  else None,
-            row_id,
-        ))
-        print(f"  {home_team} vs {away_team}: {actual_winner} wins  model={'OK' if model_pick==actual_winner else 'WRONG'}  kalshi={'OK' if kalshi_pick==actual_winner else 'WRONG'}")
-    except Exception as e:
-        print(f"  ERR game {game_pk}: {e}")
-
-conn.commit()
-
-# ── Job 2: Log today's disagreements — fetch schedule + team stats ────────
-print("\nJob 2: logging today's disagreements...")
-
-# Load team stats for win% and ERA (used for model prediction proxy)
-cur.execute("""
-    SELECT team_name, team_id, win_pct, l10_win_pct, season_era
-    FROM team_stats_cache WHERE season = %s
-""", (SEASON,))
-team_stats = {r[0]: {"id": r[1], "win_pct": float(r[2] or 0.500),
-                     "l10_win_pct": float(r[3] or 0.500), "era": float(r[4] or 4.20)}
-              for r in cur.fetchall()}
-team_by_id = {v["id"]: k for k, v in team_stats.items()}
-
-# Fetch today's MLB schedule
-print("  Fetching today's MLB schedule...")
-sched_r = requests.get(
-    f"https://statsapi.mlb.com/api/v1/schedule?sportId=1"
-    f"&startDate={today}&endDate={today}&hydrate=probablePitcher,teams"
-)
-sched   = sched_r.json()
-mlb_games = []
-for d in (sched.get("dates") or []):
-    for g in d.get("games", []):
-        state = g.get("status", {}).get("abstractGameState", "")
-        if state == "Final":
-            continue
-        home_id  = g["teams"]["home"]["team"]["id"]
-        away_id  = g["teams"]["away"]["team"]["id"]
-        home_name = team_by_id.get(home_id) or g["teams"]["home"]["team"]["name"]
-        away_name = team_by_id.get(away_id) or g["teams"]["away"]["team"]["name"]
-        home_sp_era = None
-        away_sp_era = None
-        if g["teams"]["home"].get("probablePitcher"):
-            sp_id = g["teams"]["home"]["probablePitcher"]["id"]
-            try:
-                sp_r = requests.get(f"https://statsapi.mlb.com/api/v1/people/{sp_id}/stats?stats=season&group=pitching&season={SEASON}")
-                splits = sp_r.json().get("stats",[{}])[0].get("splits",[{}])
-                home_sp_era = float(splits[0].get("stat",{}).get("era", 4.20)) if splits else 4.20
-            except: pass
-        if g["teams"]["away"].get("probablePitcher"):
-            sp_id = g["teams"]["away"]["probablePitcher"]["id"]
-            try:
-                sp_r = requests.get(f"https://statsapi.mlb.com/api/v1/people/{sp_id}/stats?stats=season&group=pitching&season={SEASON}")
-                splits = sp_r.json().get("stats",[{}])[0].get("splits",[{}])
-                away_sp_era = float(splits[0].get("stat",{}).get("era", 4.20)) if splits else 4.20
-            except: pass
-        mlb_games.append({
-            "game_pk":   g["gamePk"],
-            "home_team": home_name,
-            "away_team": away_name,
-            "home_sp_era": home_sp_era or team_stats.get(home_name, {}).get("era", 4.20),
-            "away_sp_era": away_sp_era or team_stats.get(away_name, {}).get("era", 4.20),
-        })
-print(f"  {len(mlb_games)} games today")
-
-# Fetch today's Kalshi KXMLBGAME markets
-try:
-    mk_data = kalshi_get("/markets?limit=200&series_ticker=KXMLBGAME&status=open")
-    markets = mk_data.get("markets", [])
-    ev_data = kalshi_get("/events?limit=100&series_ticker=KXMLBGAME&status=open")
-    events  = ev_data.get("events", [])
-    print(f"  {len(markets)} Kalshi markets, {len(events)} events")
-except Exception as e:
-    print(f"  Kalshi fetch failed: {e}")
-    cur.close(); conn.close(); exit(1)
-
-# Index markets by event ticker
-mkt_by_event = {}
-for m in markets:
-    mkt_by_event.setdefault(m["event_ticker"], []).append(m)
-
-# Team abbr map (same as kalshi.js)
+# ── Team abbr map ──────────────────────────────────────────────────────────
 TEAM_ABBRS = {
     "Arizona Diamondbacks":   ["AZ","ARI"],   "Atlanta Braves":         ["ATL"],
     "Baltimore Orioles":      ["BAL"],        "Boston Red Sox":         ["BOS"],
@@ -175,115 +86,325 @@ TEAM_ABBRS = {
     "Toronto Blue Jays":      ["TOR"],        "Washington Nationals":   ["WSH","WAS"],
 }
 
-def find_kalshi_market(home_team, away_team, game_date):
+# ── Kalshi market lookup ───────────────────────────────────────────────────
+def find_kalshi_prob(home_team, away_team, game_date, events, mkt_by_event):
     home_abbrs = TEAM_ABBRS.get(home_team, [])
     away_abbrs = TEAM_ABBRS.get(away_team, [])
     if not home_abbrs or not away_abbrs:
-        return None, None
+        return None
     yr, mo, dy = str(game_date).split("-")
     date_prefix = yr[2:] + MONTHS[int(mo)-1] + dy
     for ev in events:
         ticker = ev["event_ticker"].upper()
-        if not any(h.upper() in ticker for h in home_abbrs): continue
-        if not any(a.upper() in ticker for a in away_abbrs): continue
-        if date_prefix not in ticker: continue
-        # Found event — find home team market
+        if not any(h.upper() in ticker for h in home_abbrs):
+            continue
+        if not any(a.upper() in ticker for a in away_abbrs):
+            continue
+        if date_prefix not in ticker:
+            continue
         mks = mkt_by_event.get(ev["event_ticker"], [])
         home_words = [w.lower() for w in home_team.split() if len(w) > 2]
         away_words = [w.lower() for w in away_team.split() if len(w) > 2]
-        home_mkt = next((m for m in mks if any(w in (m.get("yes_sub_title","")).lower() for w in home_words)), None)
+        home_mkt = next(
+            (m for m in mks if any(w in (m.get("yes_sub_title","")).lower() for w in home_words)),
+            mks[0] if mks else None
+        )
         if not home_mkt:
-            home_mkt = mks[0] if mks else None
-        if not home_mkt:
-            return None, None
-        yes_sub = (home_mkt.get("yes_sub_title","")).lower()
-        yes_is_away = any(w in yes_sub for w in away_words) and not any(w in yes_sub for w in home_words)
-        ask = float(home_mkt.get("yes_ask_dollars",0) or 0)
-        bid = float(home_mkt.get("yes_bid_dollars",0) or 0)
+            return None
+        yes_sub    = (home_mkt.get("yes_sub_title","")).lower()
+        yes_is_away = (any(w in yes_sub for w in away_words)
+                       and not any(w in yes_sub for w in home_words))
+        ask = float(home_mkt.get("yes_ask_dollars") or 0)
+        bid = float(home_mkt.get("yes_bid_dollars") or 0)
         mid = (ask + bid) / 2 if ask and bid else (ask or bid)
-        home_prob = round(1 - mid, 3) if yes_is_away else round(mid, 3)
-        return home_prob, ev["event_ticker"]
-    return None, None
+        return round(1 - mid, 3) if yes_is_away else round(mid, 3)
+    return None
 
-logged_pks = set()
-logged = 0
+# ── Run model ─────────────────────────────────────────────────────────────
+def model_home_prob(home_woba, away_woba, home_win_pct, away_win_pct, home_sp_era, away_sp_era):
+    def pred_runs(woba, my_wpc, opp_era):
+        era_f  = max(0.80, min(1.30, opp_era / LEAGUE_AVG_ERA))
+        adj    = era_f * 0.75 + 1.0 * 0.25
+        team_q = max(0.88, min(1.12, 1.0 + (my_wpc - 0.500) * 0.5))
+        return min(woba * WOBA_RUN_SCALE * adj * team_q, MAX_RUNS)
+    hr    = pred_runs(home_woba, home_win_pct, away_sp_era)
+    ar    = pred_runs(away_woba, away_win_pct, home_sp_era)
+    opp_h = 4.65 + (away_win_pct - 0.500) * 13.0
+    opp_a = 4.65 + (home_win_pct - 0.500) * 13.0
+    rh    = 1 / (1 + math.exp(-(hr - opp_h) * 0.40))
+    ra    = 1 / (1 + math.exp(-(ar - opp_a) * 0.40))
+    s     = rh + ra
+    return round(rh / s, 3) if s > 0 else 0.500
 
-for g in mlb_games:
-    game_pk   = g["game_pk"]
-    home_team = g["home_team"]
-    away_team = g["away_team"]
-    if game_pk in logged_pks:
-        continue
+# ════════════════════════════════════════════════════════════════════════════
+# OUTCOMES — fill actual results for yesterday's logged rows
+# ════════════════════════════════════════════════════════════════════════════
+if MODE in ("outcomes", "morning", "nightly"):
+    print("Filling outcomes for yesterday's games...")
+    cur.execute("""
+        SELECT id, game_pk, home_team, away_team, model_pick, kalshi_pick, cycle_pick
+        FROM kalshi_tracker
+        WHERE game_date = %s AND actual_winner IS NULL AND game_pk IS NOT NULL
+    """, (yesterday,))
+    pending = cur.fetchall()
+    print(f"  {len(pending)} rows need outcomes")
+    for row_id, game_pk, home_team, away_team, model_pick, kalshi_pick, cycle_pick in pending:
+        try:
+            r = requests.get(f"https://statsapi.mlb.com/api/v1/game/{game_pk}/linescore")
+            d = r.json()
+            home_score = d.get("teams", {}).get("home", {}).get("runs")
+            away_score = d.get("teams", {}).get("away", {}).get("runs")
+            if home_score is None or away_score is None:
+                continue
+            actual_winner = "home" if home_score > away_score else "away"
+            cur.execute("""
+                UPDATE kalshi_tracker SET
+                    actual_winner  = %s,
+                    model_correct  = %s,
+                    kalshi_correct = %s,
+                    cycle_correct  = %s
+                WHERE id = %s
+            """, (
+                actual_winner,
+                model_pick  == actual_winner if model_pick  else None,
+                kalshi_pick == actual_winner if kalshi_pick else None,
+                cycle_pick  == actual_winner if cycle_pick  else None,
+                row_id,
+            ))
+            print(f"  {home_team} vs {away_team}: {actual_winner}  model={'OK' if model_pick==actual_winner else 'WRONG'}")
+        except Exception as e:
+            print(f"  ERR game {game_pk}: {e}")
+    conn.commit()
 
-    # Simple run model: wOBA proxy = 0.320 (league avg), ERA-adjusted
-    # Use team win% blended 50/50 last-10 + season as proxy for quality discount
-    ht = team_stats.get(home_team, {})
-    at = team_stats.get(away_team, {})
-    home_win_pct = (ht.get("l10_win_pct",0.5)*0.5 + ht.get("win_pct",0.5)*0.5)
-    away_win_pct = (at.get("l10_win_pct",0.5)*0.5 + at.get("win_pct",0.5)*0.5)
+# ════════════════════════════════════════════════════════════════════════════
+# MORNING + PREGAME — fetch schedule, run model, compare Kalshi
+# ════════════════════════════════════════════════════════════════════════════
+if MODE in ("morning", "pregame"):
+    print(f"\nFetching team stats + schedule...")
 
-    LEAGUE_AVG_ERA  = 4.20
-    WOBA_RUN_SCALE  = 17.0
-    MAX_RUNS        = 7.5
-    LEAGUE_AVG_WOBA = 0.320
+    # Team stats
+    cur.execute("""
+        SELECT team_name, team_id, win_pct, l10_win_pct, season_era
+        FROM team_stats_cache WHERE season = %s
+    """, (SEASON,))
+    team_stats = {
+        r[0]: {"id": r[1], "win_pct": float(r[2] or 0.500),
+               "l10_win_pct": float(r[3] or 0.500), "era": float(r[4] or 4.20)}
+        for r in cur.fetchall()
+    }
+    team_by_id = {v["id"]: k for k, v in team_stats.items()}
 
-    def pred_runs(my_win_pct, opp_era, opp_win_pct):
-        era_factor  = max(0.80, min(1.30, opp_era / LEAGUE_AVG_ERA))
-        adj_era     = era_factor * 0.75 + 1.0 * 0.25
-        team_q      = max(0.88, min(1.12, 1.0 + (my_win_pct - 0.500) * 0.5))
-        return min(LEAGUE_AVG_WOBA * WOBA_RUN_SCALE * adj_era * team_q, MAX_RUNS)
+    # Player wOBA (recent-weighted)
+    cur.execute("""
+        SELECT player_name,
+               COALESCE(
+                   AVG(woba) FILTER (WHERE woba > 0 AND game_date >= current_date - 21) * 0.6
+                   + AVG(woba) FILTER (WHERE woba > 0) * 0.4,
+                   AVG(woba) FILTER (WHERE woba > 0)
+               ) AS avg_woba
+        FROM player_gamelogs
+        WHERE season = %s AND woba IS NOT NULL
+        GROUP BY player_name HAVING COUNT(*) >= 5
+    """, (SEASON,))
+    player_woba = {r[0]: float(r[1]) for r in cur.fetchall() if r[1]}
 
-    home_runs = pred_runs(home_win_pct, g["away_sp_era"], away_win_pct)
-    away_runs = pred_runs(away_win_pct, g["home_sp_era"], home_win_pct)
+    # Team avg wOBA from top-9
+    cur.execute("""
+        SELECT player_name, team FROM player_gamelogs
+        WHERE season = %s GROUP BY player_name, team
+    """, (SEASON,))
+    team_roster_woba = {}
+    for name, team in cur.fetchall():
+        if name in player_woba:
+            team_roster_woba.setdefault(team, []).append(player_woba[name])
 
-    opp_home_est = 4.65 + (away_win_pct - 0.500) * 13.0
-    opp_away_est = 4.65 + (home_win_pct - 0.500) * 13.0
+    def team_avg_woba(team_name):
+        wobas = sorted(team_roster_woba.get(team_name, []), reverse=True)[:9]
+        return round(sum(wobas) / len(wobas), 4) if wobas else 0.320
 
-    home_raw = 1 / (1 + math.exp(-(home_runs - opp_home_est) * 0.40))
-    away_raw = 1 / (1 + math.exp(-(away_runs - opp_away_est) * 0.40))
-    prob_sum = home_raw + away_raw
-    model_home_prob = round(home_raw / prob_sum, 3) if prob_sum > 0 else 0.500
-    model_confidence = round(abs(model_home_prob - 0.5) * 2, 3)
+    # MLB schedule
+    sched_r = requests.get(
+        f"https://statsapi.mlb.com/api/v1/schedule?sportId=1"
+        f"&startDate={today}&endDate={today}&hydrate=probablePitcher,teams"
+    )
+    mlb_games = []
+    for d in (sched_r.json().get("dates") or []):
+        for g in d.get("games", []):
+            if g.get("status", {}).get("abstractGameState") == "Final":
+                continue
+            home_id   = g["teams"]["home"]["team"]["id"]
+            away_id   = g["teams"]["away"]["team"]["id"]
+            home_name = team_by_id.get(home_id) or g["teams"]["home"]["team"]["name"]
+            away_name = team_by_id.get(away_id) or g["teams"]["away"]["team"]["name"]
+            home_sp_era = team_stats.get(home_name, {}).get("era", LEAGUE_AVG_ERA)
+            away_sp_era = team_stats.get(away_name, {}).get("era", LEAGUE_AVG_ERA)
+            for side, attr in [("home", "home_sp_era"), ("away", "away_sp_era")]:
+                sp = g["teams"][side].get("probablePitcher")
+                if sp:
+                    try:
+                        sr = requests.get(
+                            f"https://statsapi.mlb.com/api/v1/people/{sp['id']}/stats"
+                            f"?stats=season&group=pitching&season={SEASON}"
+                        )
+                        splits = sr.json().get("stats", [{}])[0].get("splits", [])
+                        if splits:
+                            era = float(splits[0].get("stat", {}).get("era", LEAGUE_AVG_ERA))
+                            if attr == "home_sp_era":
+                                home_sp_era = era
+                            else:
+                                away_sp_era = era
+                    except:
+                        pass
 
-    # Get Kalshi odds
-    kalshi_home_prob, event_ticker = find_kalshi_market(home_team, away_team, today)
-    if kalshi_home_prob is None:
-        continue
+            # Try boxscore for confirmed lineup wOBAs
+            lineup_source     = "estimated"
+            home_lineup_woba  = team_avg_woba(home_name)
+            away_lineup_woba  = team_avg_woba(away_name)
+            try:
+                bs = requests.get(
+                    f"https://statsapi.mlb.com/api/v1/game/{g['gamePk']}/boxscore"
+                ).json()
+                for side, tname in [("home", home_name), ("away", away_name)]:
+                    bside = bs.get("teams", {}).get(side, {})
+                    order = bside.get("battingOrder", [])
+                    if len(order) >= 9:
+                        lineup_source = "actual"
+                        pdata = bside.get("players", {})
+                        wobas = [
+                            player_woba.get(
+                                pdata.get(f"ID{pid}", {}).get("person", {}).get("fullName", ""),
+                                0.320
+                            )
+                            for pid in order[:9]
+                        ]
+                        avg = round(sum(wobas) / len(wobas), 4)
+                        if side == "home":
+                            home_lineup_woba = avg
+                        else:
+                            away_lineup_woba = avg
+            except:
+                pass
 
-    prob_gap = round(model_home_prob - kalshi_home_prob, 3)
-    if abs(prob_gap) < GAP_THRESH:
-        continue
+            mlb_games.append({
+                "game_pk":         g["gamePk"],
+                "home_team":       home_name,
+                "away_team":       away_name,
+                "home_sp_era":     home_sp_era,
+                "away_sp_era":     away_sp_era,
+                "home_lineup_woba": home_lineup_woba,
+                "away_lineup_woba": away_lineup_woba,
+                "lineup_source":   lineup_source,
+                "game_time_utc":   g.get("gameDate"),
+            })
+    print(f"  {len(mlb_games)} games today")
 
-    model_pick  = "home" if model_home_prob >= 0.5 else "away"
-    kalshi_pick = "home" if kalshi_home_prob >= 0.5 else "away"
-    signal_type = "strong_edge" if model_confidence >= 0.25 else "disagreement"
-
+    # Fetch Kalshi markets
     try:
-        cur.execute("""
-            INSERT INTO kalshi_tracker
-            (game_date, season, home_team, away_team, game_pk,
-             model_home_prob, model_away_prob, model_pick, model_confidence,
-             kalshi_home_prob, kalshi_away_prob, kalshi_pick,
-             prob_gap, signal_type)
-            VALUES (%s,%s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s, %s,%s)
-            ON CONFLICT (game_pk, game_date) DO UPDATE SET
-                model_home_prob  = EXCLUDED.model_home_prob,
-                kalshi_home_prob = EXCLUDED.kalshi_home_prob,
-                prob_gap         = EXCLUDED.prob_gap,
-                signal_type      = EXCLUDED.signal_type
-        """, (
-            today, SEASON, home_team, away_team, game_pk,
-            model_home_prob, round(1-model_home_prob,3), model_pick, round(model_confidence,3),
-            kalshi_home_prob, round(1-kalshi_home_prob,3), kalshi_pick,
-            prob_gap, signal_type,
-        ))
-        logged_pks.add(game_pk)
-        logged += 1
-        print(f"  Logged: {away_team} @ {home_team}  gap={prob_gap:+.2f}  signal={signal_type}")
+        mk_data = kalshi_get("/markets?limit=200&series_ticker=KXMLBGAME&status=open")
+        ev_data = kalshi_get("/events?limit=100&series_ticker=KXMLBGAME&status=open")
+        markets = mk_data.get("markets", [])
+        events  = ev_data.get("events", [])
+        print(f"  {len(markets)} Kalshi markets, {len(events)} events")
     except Exception as e:
-        print(f"  ERR logging {home_team}: {e}")
+        print(f"  Kalshi fetch failed: {e}")
+        cur.close(); conn.close(); exit(1)
 
-conn.commit()
+    mkt_by_event = {}
+    for m in markets:
+        mkt_by_event.setdefault(m["event_ticker"], []).append(m)
+
+    logged = 0
+    for g in mlb_games:
+        game_pk   = g["game_pk"]
+        home_team = g["home_team"]
+        away_team = g["away_team"]
+
+        ht = team_stats.get(home_team, {})
+        at = team_stats.get(away_team, {})
+        hwp = ht.get("l10_win_pct", 0.5) * 0.5 + ht.get("win_pct", 0.5) * 0.5
+        awp = at.get("l10_win_pct", 0.5) * 0.5 + at.get("win_pct", 0.5) * 0.5
+
+        mhp  = model_home_prob(g["home_lineup_woba"], g["away_lineup_woba"],
+                               hwp, awp, g["home_sp_era"], g["away_sp_era"])
+        conf = round(abs(mhp - 0.5) * 2, 3)
+        pick = "home" if mhp >= 0.5 else "away"
+        sig  = "strong_edge" if conf >= 0.25 else "disagreement"
+
+        khp = find_kalshi_prob(home_team, away_team, today, events, mkt_by_event)
+        if khp is None:
+            continue
+
+        gap = round(mhp - khp, 3)
+
+        # ── MORNING: insert new row if gap exceeds threshold ───────────────
+        if MODE == "morning":
+            if abs(gap) < GAP_THRESH:
+                continue
+            try:
+                cur.execute("""
+                    INSERT INTO kalshi_tracker
+                    (game_date, season, home_team, away_team, game_pk,
+                     model_home_prob, model_away_prob, model_pick, model_confidence,
+                     kalshi_home_prob, kalshi_away_prob, kalshi_pick,
+                     prob_gap, signal_type, lineup_source, game_time_utc)
+                    VALUES (%s,%s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s, %s,%s,%s,%s)
+                    ON CONFLICT (game_pk, game_date) DO UPDATE SET
+                        model_home_prob  = EXCLUDED.model_home_prob,
+                        kalshi_home_prob = EXCLUDED.kalshi_home_prob,
+                        prob_gap         = EXCLUDED.prob_gap,
+                        signal_type      = EXCLUDED.signal_type,
+                        lineup_source    = EXCLUDED.lineup_source
+                """, (
+                    today, SEASON, home_team, away_team, game_pk,
+                    mhp, round(1-mhp,3), pick, conf,
+                    khp, round(1-khp,3), "home" if khp >= 0.5 else "away",
+                    gap, sig, g["lineup_source"], g["game_time_utc"],
+                ))
+                logged += 1
+                print(f"  Morning: {away_team} @ {home_team}  gap={gap:+.2f}  {sig}")
+            except Exception as e:
+                print(f"  ERR {home_team}: {e}")
+
+        # ── PREGAME: update row for games starting in next 90 min with confirmed lineup ──
+        elif MODE == "pregame":
+            gtime = g.get("game_time_utc")
+            if not gtime:
+                continue
+            try:
+                game_dt = datetime.fromisoformat(gtime.replace("Z", "+00:00"))
+                mins    = (game_dt - now_utc).total_seconds() / 60
+                if not (0 <= mins <= 90):
+                    continue
+            except:
+                continue
+            if g["lineup_source"] != "actual":
+                continue
+            try:
+                cur.execute("""
+                    UPDATE kalshi_tracker SET
+                        pregame_model_home_prob  = %s,
+                        pregame_model_away_prob  = %s,
+                        pregame_kalshi_home_prob = %s,
+                        pregame_kalshi_away_prob = %s,
+                        pregame_model_pick       = %s,
+                        pregame_signal_type      = %s,
+                        pregame_logged_at        = NOW(),
+                        lineup_source            = %s
+                    WHERE game_pk = %s AND game_date = %s
+                """, (
+                    mhp, round(1-mhp,3), khp, round(1-khp,3),
+                    pick, sig, g["lineup_source"],
+                    game_pk, today,
+                ))
+                if cur.rowcount:
+                    logged += 1
+                    print(f"  Pre-game: {away_team} @ {home_team}  model={mhp} kalshi={khp}  gap={gap:+.2f}")
+            except Exception as e:
+                print(f"  ERR pregame {home_team}: {e}")
+
+    conn.commit()
+    print(f"  {logged} rows {'logged' if MODE=='morning' else 'updated'}")
+
 cur.close()
 conn.close()
-print(f"\nDone: {logged} disagreements logged, {len(pending)} outcomes filled")
+print("Done.")
