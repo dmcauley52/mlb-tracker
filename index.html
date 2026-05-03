@@ -1455,15 +1455,20 @@
                         </div>
                       );
                       const modelProb = r.pregame_model_home_prob != null
-                        ? (r.model_pick === r.home_team ? parseFloat(r.pregame_model_home_prob) : 1 - parseFloat(r.pregame_model_home_prob))
-                        : null;
+                        ? (r.model_pick === 'home' ? parseFloat(r.pregame_model_home_prob) : 1 - parseFloat(r.pregame_model_home_prob))
+                        : r.model_home_prob != null
+                          ? (r.model_pick === 'home' ? parseFloat(r.model_home_prob) : parseFloat(r.model_away_prob))
+                          : null;
                       const kalshiProb = r.pregame_kalshi_home_prob != null
-                        ? (r.kalshi_pick === r.home_team ? parseFloat(r.pregame_kalshi_home_prob) : 1 - parseFloat(r.pregame_kalshi_home_prob))
+                        ? (r.kalshi_pick === 'home' ? parseFloat(r.pregame_kalshi_home_prob) : 1 - parseFloat(r.pregame_kalshi_home_prob))
                         : (r.kalshi_home_prob != null
-                          ? (r.kalshi_pick === r.home_team ? parseFloat(r.kalshi_home_prob) : parseFloat(r.kalshi_away_prob))
+                          ? (r.kalshi_pick === 'home' ? parseFloat(r.kalshi_home_prob) : parseFloat(r.kalshi_away_prob))
                           : null);
+                      const cycleProb = r.cycle_home_prob != null
+                        ? (r.cycle_pick === 'home' ? parseFloat(r.cycle_home_prob) : 1 - parseFloat(r.cycle_home_prob))
+                        : null;
                       const vegasProb = r.vegas_home_prob != null
-                        ? (r.vegas_pick === r.home_team ? parseFloat(r.vegas_home_prob) : 1 - parseFloat(r.vegas_home_prob))
+                        ? (r.vegas_pick === 'home' ? parseFloat(r.vegas_home_prob) : 1 - parseFloat(r.vegas_home_prob))
                         : null;
                       return (
                         <div key={i} style={{display:'grid',gridTemplateColumns:'80px 1fr 55px 55px 65px 65px 65px 65px 65px',
