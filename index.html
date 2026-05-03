@@ -531,8 +531,9 @@
     // ── Today's Matchups Tab ─────────────────────────────────────────────────
     // Extracted game card so useState (lineup toggle) is legal inside .map()
     function MatchupCard({g, roster, predCache, fmtTime, fmtPct, winColor, mismatchColor, spLabel, kalshi, vegas}) {
-      const [showLineups, setShowLineups] = React.useState(false);
-      const [lineups,     setLineups]     = React.useState(null);
+      const [showLineups,   setShowLineups]   = React.useState(false);
+      const [lineups,       setLineups]       = React.useState(null);
+      const [badgeHovered,  setBadgeHovered]  = React.useState(false);
 
       const wobaColor = w => !w?'#64748b':w>=.370?'#22c55e':w>=.320?'#a3e635':w>=.280?'#f59e0b':'#ef4444';
       const tierIcon  = t => t==="hot"?"↑":t==="warm"?"↗":t==="cold"?"↓":"→";
@@ -634,6 +635,27 @@
         live:     '🔴 LIVE',
         none:     '',
       }[edgeStrength];
+
+      // Tooltip: explain why this badge was shown
+      const edgeTooltip = (() => {
+        if (edgeStrength === 'none' || edgeStrength === 'live') return null;
+        const agreeNames = signals.filter(s => s.fav === modelFav).map(s => s.key);
+        const disagreeName = signals.filter(s => s.fav !== modelFav).map(s => s.key);
+        const lines = [];
+        lines.push(`${agreeCount}/${signalCount} signals favor ${edgeTeamAbbr}: ${agreeNames.join(', ')}`);
+        if (disagreeName.length) lines.push(`Against: ${disagreeName.join(', ')}`);
+        if (favoredGap != null && favoredGap > 0)
+          lines.push(`Market underprices ${edgeTeamAbbr} by ${gapPct.toFixed(0)}pp`);
+        else if (favoredGap == null)
+          lines.push('No market data — based on signal agreement only');
+        if (edgeStrength === 'strong')
+          lines.push('Bet size: consider full unit');
+        else if (edgeStrength === 'moderate')
+          lines.push('Bet size: consider half unit');
+        else
+          lines.push('Gap is small — monitor for price movement');
+        return lines;
+      })();
 
       const LineupPanel = ({title, lineup, sp, spEra, accentColor}) => {
         const l10wins = null; // not available in today's context
@@ -832,12 +854,36 @@
                     </div>
                     <span style={{fontSize:10,color:'#475569'}}>{agreeCount}/{signalCount} signals agree</span>
                   </div>
-                  {/* Edge badge */}
+                  {/* Edge badge + tooltip */}
                   {edgeStrength !== 'none' && edgeBadgeLabel && (
-                    <span style={{fontSize:11,fontWeight:800,color:ec.badge,
-                      background:`${ec.badge}18`,borderRadius:5,padding:'3px 10px',letterSpacing:0.3}}>
-                      {edgeBadgeLabel}
-                    </span>
+                    <div style={{position:'relative',display:'inline-block'}}>
+                      <span
+                        onMouseEnter={() => setBadgeHovered(true)}
+                        onMouseLeave={() => setBadgeHovered(false)}
+                        style={{fontSize:11,fontWeight:800,color:ec.badge,cursor:'help',
+                          background:`${ec.badge}18`,borderRadius:5,padding:'3px 10px',letterSpacing:0.3,
+                          borderBottom:`1px dashed ${ec.badge}80`}}>
+                        {edgeBadgeLabel}
+                      </span>
+                      {badgeHovered && edgeTooltip && (
+                        <div style={{position:'absolute',right:0,top:'calc(100% + 6px)',zIndex:100,
+                          background:'#0f172a',border:`1px solid ${ec.badge}50`,borderRadius:8,
+                          padding:'10px 14px',minWidth:220,maxWidth:300,boxShadow:'0 8px 24px rgba(0,0,0,0.5)'}}>
+                          <div style={{fontSize:10,fontWeight:700,color:ec.badge,
+                            textTransform:'uppercase',letterSpacing:0.5,marginBottom:6}}>
+                            Why this edge?
+                          </div>
+                          {edgeTooltip.map((line, i) => (
+                            <div key={i} style={{fontSize:11,color: i===0?'#e2e8f0':'#94a3b8',
+                              marginBottom: i < edgeTooltip.length-1 ? 4 : 0,
+                              paddingLeft: i > 0 ? 8 : 0,
+                              borderLeft: i > 0 ? `2px solid ${ec.badge}30` : 'none'}}>
+                              {line}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
 
