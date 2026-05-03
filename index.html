@@ -1034,7 +1034,7 @@
       React.useEffect(() => {
         if (!sbUrl || !sbKey) return;
         sbFetch(sbUrl, sbKey,
-          `kalshi_tracker?select=game_pk,game_date,home_team,away_team,model_pick,kalshi_pick,cycle_pick,vegas_pick,prob_gap,signal_type,model_confidence,model_correct,kalshi_correct,cycle_correct,vegas_correct,actual_winner,pregame_model_home_prob,pregame_kalshi_home_prob,pregame_signal_type,lineup_source,vegas_home_prob,kalshi_home_prob,kalshi_away_prob&order=game_date.desc&limit=100`
+          `kalshi_tracker?select=game_pk,game_date,home_team,away_team,model_pick,kalshi_pick,cycle_pick,vegas_pick,prob_gap,signal_type,model_confidence,model_correct,kalshi_correct,cycle_correct,vegas_correct,actual_winner,pregame_model_home_prob,pregame_kalshi_home_prob,pregame_signal_type,lineup_source,vegas_home_prob,kalshi_home_prob,kalshi_away_prob,model_home_prob,model_away_prob,cycle_home_prob,cycle_away_prob,cycle_home_score,cycle_away_score&order=game_date.desc&limit=100`
         ).then(rows => { if (rows?.length) setTracker(rows); }).catch(() => {});
       }, [sbUrl, sbKey]);
 
@@ -1152,7 +1152,7 @@
       React.useEffect(() => {
         if (!sbUrl || !sbKey) return;
         sbFetch(sbUrl, sbKey,
-          `kalshi_tracker?select=game_pk,game_date,home_team,away_team,model_pick,kalshi_pick,cycle_pick,vegas_pick,prob_gap,signal_type,model_confidence,model_correct,kalshi_correct,cycle_correct,vegas_correct,actual_winner,pregame_model_home_prob,pregame_kalshi_home_prob,pregame_signal_type,lineup_source,vegas_home_prob,kalshi_home_prob,kalshi_away_prob&order=game_date.desc&limit=100`
+          `kalshi_tracker?select=game_pk,game_date,home_team,away_team,model_pick,kalshi_pick,cycle_pick,vegas_pick,prob_gap,signal_type,model_confidence,model_correct,kalshi_correct,cycle_correct,vegas_correct,actual_winner,pregame_model_home_prob,pregame_kalshi_home_prob,pregame_signal_type,lineup_source,vegas_home_prob,kalshi_home_prob,kalshi_away_prob,model_home_prob,model_away_prob,cycle_home_prob,cycle_away_prob,cycle_home_score,cycle_away_score&order=game_date.desc&limit=100`
         ).then(rows => { if (rows?.length) setTracker(rows); }).catch(() => {});
       }, [sbUrl, sbKey]);
 
