@@ -6,7 +6,10 @@
       "Bash(grep -n \"BtGameRow\\\\|function BtGameRow\" \"c:\\\\\\\\Users\\\\\\\\dmcau\\\\\\\\OneDrive\\\\\\\\Projects\\\\\\\\mlb-tracker\\\\\\\\index.html\")",
       "PowerShell(python fetch_backtest_cache.py)",
       "Bash(python -c ' *)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)"
     ]
   }
 }
