@@ -46,6 +46,19 @@ CREATE TABLE IF NOT EXISTS kalshi_tracker (
 """)
 
 conn.commit()
+
+# Add Vegas columns if they don't exist yet
+for col, typedef in [
+    ("vegas_home_prob", "NUMERIC(5,3)"),
+    ("vegas_away_prob", "NUMERIC(5,3)"),
+    ("vegas_pick",      "TEXT"),
+    ("vegas_correct",   "BOOLEAN"),
+]:
+    cur.execute(f"""
+        ALTER TABLE kalshi_tracker ADD COLUMN IF NOT EXISTS {col} {typedef};
+    """)
+
+conn.commit()
 cur.close()
 conn.close()
-print("kalshi_tracker table created (or already exists)")
+print("kalshi_tracker table ready (vegas columns added if missing)")

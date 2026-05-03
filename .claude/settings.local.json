@@ -5,7 +5,8 @@
       "Bash(grep -n \"GamePlanTab\\\\|upcoming schedule\\\\|predicted runs\\\\|wOBA\" \"c:\\\\\\\\Users\\\\\\\\dmcau\\\\\\\\OneDrive\\\\\\\\Projects\\\\\\\\mlb-tracker\\\\\\\\index.html\")",
       "Bash(grep -n \"BtGameRow\\\\|function BtGameRow\" \"c:\\\\\\\\Users\\\\\\\\dmcau\\\\\\\\OneDrive\\\\\\\\Projects\\\\\\\\mlb-tracker\\\\\\\\index.html\")",
       "PowerShell(python fetch_backtest_cache.py)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "WebSearch"
     ]
   }
 }

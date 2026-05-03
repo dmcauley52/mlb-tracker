@@ -530,7 +530,7 @@
 
     // ── Today's Matchups Tab ─────────────────────────────────────────────────
     // Extracted game card so useState (lineup toggle) is legal inside .map()
-    function MatchupCard({g, roster, predCache, fmtTime, fmtPct, winColor, mismatchColor, spLabel, kalshi}) {
+    function MatchupCard({g, roster, predCache, fmtTime, fmtPct, winColor, mismatchColor, spLabel, kalshi, vegas}) {
       const [showLineups, setShowLineups] = React.useState(false);
       const [lineups,     setLineups]     = React.useState(null);
 
@@ -793,6 +793,37 @@
             );
           })()}
 
+          {/* Vegas odds row */}
+          {vegas?.home_prob != null && (()=>{
+            const vegasHomeProb = vegas.home_prob;
+            const vegasAwayProb = Math.round((1 - vegasHomeProb) * 1000) / 1000;
+            const vegasFav = vegasHomeProb >= 0.5 ? 'home' : 'away';
+            const modelFav = g.favorite;
+            const agrees = vegasFav === modelFav;
+            const borderColor = agrees ? 'rgba(16,185,129,0.3)' : 'rgba(245,158,11,0.3)';
+            return (
+              <div style={{marginTop:6,padding:'8px 12px',background:'#0f172a',borderRadius:8,
+                display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',
+                border:`1px solid ${borderColor}`}}>
+                <span style={{fontSize:10,fontWeight:700,color:'#10b981',letterSpacing:0.5,textTransform:'uppercase',flexShrink:0}}>
+                  Vegas (DK)
+                </span>
+                <div style={{display:'flex',alignItems:'center',gap:5}}>
+                  <span style={{fontSize:11,color:'#94a3b8'}}>{g.awayAbbr}</span>
+                  <span style={{fontSize:15,fontWeight:800,color:winColor(vegasAwayProb)}}>{fmtPct(vegasAwayProb)}</span>
+                </div>
+                <span style={{color:'#334155',fontSize:11}}>vs</span>
+                <div style={{display:'flex',alignItems:'center',gap:5}}>
+                  <span style={{fontSize:11,color:'#94a3b8'}}>{g.homeAbbr}</span>
+                  <span style={{fontSize:15,fontWeight:800,color:winColor(vegasHomeProb)}}>{fmtPct(vegasHomeProb)}</span>
+                </div>
+                <span style={{marginLeft:'auto',fontSize:9,color:agrees?'#10b981':'#f59e0b'}}>
+                  {agrees ? '✓ agrees with model' : '⚡ Vegas pick differs from model'}
+                </span>
+              </div>
+            );
+          })()}
+
           {/* Lineup panels */}
           {showLineups && (
             <div style={{display:'flex',gap:10,marginTop:12,flexWrap:'wrap'}}>
@@ -872,7 +903,7 @@
       React.useEffect(() => {
         if (!sbUrl || !sbKey) return;
         sbFetch(sbUrl, sbKey,
-          `kalshi_tracker?select=game_date,home_team,away_team,model_pick,kalshi_pick,cycle_pick,prob_gap,signal_type,model_confidence,model_correct,kalshi_correct,cycle_correct,actual_winner,pregame_model_home_prob,pregame_kalshi_home_prob,pregame_signal_type,lineup_source&order=game_date.desc&limit=100`
+          `kalshi_tracker?select=game_pk,game_date,home_team,away_team,model_pick,kalshi_pick,cycle_pick,vegas_pick,prob_gap,signal_type,model_confidence,model_correct,kalshi_correct,cycle_correct,vegas_correct,actual_winner,pregame_model_home_prob,pregame_kalshi_home_prob,pregame_signal_type,lineup_source,vegas_home_prob&order=game_date.desc&limit=100`
         ).then(rows => { if (rows?.length) setTracker(rows); }).catch(() => {});
       }, [sbUrl, sbKey]);
 
@@ -919,6 +950,10 @@
 
       const todayGames     = games.filter(g => g.dateStr === today);
       const tomorrowGames  = games.filter(g => g.dateStr !== today);
+      const vegasByPk = Object.fromEntries(
+        tracker.filter(r => r.vegas_home_prob != null)
+                .map(r => [r.game_pk, {home_prob: parseFloat(r.vegas_home_prob)}])
+      );
 
       const renderGroup = (label, group) => {
         if (!group.length) return null;
@@ -931,7 +966,8 @@
               <MatchupCard key={g.gamePk} g={g} roster={roster} predCache={predCache}
                 fmtTime={fmtTime} fmtPct={fmtPct} winColor={winColor}
                 mismatchColor={mismatchColor} spLabel={spLabel}
-                kalshi={kalshiOdds[g.gamePk] || null} />
+                kalshi={kalshiOdds[g.gamePk] || null}
+                vegas={vegasByPk[g.gamePk] || null} />
             ))}
           </div>
         );
@@ -1013,6 +1049,7 @@
                         {statCell('Model', pct(strong,'model_correct'), `${strong.filter(r=>r.model_correct).length}/${strong.length}`, col(pct(strong,'model_correct')))}
                         {statCell('Kalshi', pct(strong,'kalshi_correct'), `${strong.filter(r=>r.kalshi_correct).length}/${strong.length}`, col(pct(strong,'kalshi_correct')))}
                         {statCell('Cycle', pct(strong,'cycle_correct'), `${strong.filter(r=>r.cycle_correct).length}/${strong.length}`, col(pct(strong,'cycle_correct')))}
+                        {strong.some(r=>r.vegas_correct!=null) && statCell('Vegas', pct(strong,'vegas_correct'), `${strong.filter(r=>r.vegas_correct).length}/${strong.filter(r=>r.vegas_correct!=null).length}`, col(pct(strong,'vegas_correct')))}
                       </div>
                     </div>
                     {/* Weak disagreement */}
@@ -1024,6 +1061,7 @@
                         {statCell('Model', pct(weak,'model_correct'), `${weak.filter(r=>r.model_correct).length}/${weak.length}`, col(pct(weak,'model_correct')))}
                         {statCell('Kalshi', pct(weak,'kalshi_correct'), `${weak.filter(r=>r.kalshi_correct).length}/${weak.length}`, col(pct(weak,'kalshi_correct')))}
                         {statCell('Cycle', pct(weak,'cycle_correct'), `${weak.filter(r=>r.cycle_correct).length}/${weak.length}`, col(pct(weak,'cycle_correct')))}
+                        {weak.some(r=>r.vegas_correct!=null) && statCell('Vegas', pct(weak,'vegas_correct'), `${weak.filter(r=>r.vegas_correct).length}/${weak.filter(r=>r.vegas_correct!=null).length}`, col(pct(weak,'vegas_correct')))}
                       </div>
                     </div>
                   </div>
@@ -1033,7 +1071,7 @@
                 {resolved.length > 0 && (
                   <div style={{marginTop:12}}>
                     <div style={{fontSize:9,color:'#334155',fontWeight:700,textTransform:'uppercase',letterSpacing:0.5,marginBottom:6}}>Recent</div>
-                    <div style={{display:'grid',gridTemplateColumns:'80px 1fr 55px 55px 55px 55px 55px 55px',gap:0,
+                    <div style={{display:'grid',gridTemplateColumns:'80px 1fr 55px 55px 55px 55px 55px 55px 55px',gap:0,
                       padding:'4px 8px',fontSize:9,color:'#475569',fontWeight:700,borderBottom:'1px solid #0f172a'}}>
                       <span>Date</span><span>Game</span>
                       <span style={{textAlign:'center'}}>AM Gap</span>
@@ -1041,6 +1079,7 @@
                       <span style={{textAlign:'center'}}>Model</span>
                       <span style={{textAlign:'center'}}>Kalshi</span>
                       <span style={{textAlign:'center'}}>Cycle</span>
+                      <span style={{textAlign:'center',color:'#10b981'}}>Vegas</span>
                       <span style={{textAlign:'center'}}>Result</span>
                     </div>
                     {resolved.slice(0,10).map((r,i) => {
@@ -1048,7 +1087,7 @@
                       const pgGap = kalshiMoved && r.pregame_model_home_prob != null
                         ? +(r.pregame_model_home_prob - r.pregame_kalshi_home_prob).toFixed(2) : null;
                       return (
-                        <div key={i} style={{display:'grid',gridTemplateColumns:'80px 1fr 55px 55px 55px 55px 55px 55px',
+                        <div key={i} style={{display:'grid',gridTemplateColumns:'80px 1fr 55px 55px 55px 55px 55px 55px 55px',
                           gap:0,padding:'5px 8px',fontSize:10,borderBottom:'1px solid #0f172a',
                           background:i%2===0?'rgba(15,23,42,0.4)':'transparent',alignItems:'center'}}>
                           <span style={{color:'#475569'}}>{r.game_date}</span>
@@ -1065,6 +1104,7 @@
                           <span style={{textAlign:'center',fontSize:13}}>{r.model_correct===true?'✓':r.model_correct===false?'✗':'—'}</span>
                           <span style={{textAlign:'center',fontSize:13}}>{r.kalshi_correct===true?'✓':r.kalshi_correct===false?'✗':'—'}</span>
                           <span style={{textAlign:'center',fontSize:13}}>{r.cycle_correct===true?'✓':r.cycle_correct===false?'✗':'—'}</span>
+                          <span style={{textAlign:'center',fontSize:13,color:'#10b981'}}>{r.vegas_correct===true?'✓':r.vegas_correct===false?'✗':'—'}</span>
                           <span style={{textAlign:'center',color:'#64748b'}}>{r.actual_winner||'—'}</span>
                         </div>
                       );

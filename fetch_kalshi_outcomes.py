@@ -23,6 +23,7 @@ MODE        = os.getenv("MODE", "morning")
 SEASON      = 2026
 GAP_THRESH  = 0.10
 KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
+ODDS_API_KEY = os.getenv("ODDS_API_KEY", "")
 MONTHS      = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"]
 LEAGUE_AVG_ERA  = 4.20
 WOBA_RUN_SCALE  = 17.0
@@ -136,19 +137,75 @@ def model_home_prob(home_woba, away_woba, home_win_pct, away_win_pct, home_sp_er
     s     = rh + ra
     return round(rh / s, 3) if s > 0 else 0.500
 
+# ── The Odds API ──────────────────────────────────────────────────────────
+def fetch_vegas_odds():
+    """Returns {(home_team, away_team): home_prob} using DraftKings h2h lines."""
+    if not ODDS_API_KEY:
+        return {}
+    try:
+        r = requests.get(
+            "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds",
+            params={
+                "apiKey":   ODDS_API_KEY,
+                "regions":  "us",
+                "markets":  "h2h",
+                "bookmakers": "draftkings",
+                "oddsFormat": "american",
+            },
+            timeout=10,
+        )
+        r.raise_for_status()
+        result = {}
+        for game in r.json():
+            home = game.get("home_team", "")
+            away = game.get("away_team", "")
+            for bm in game.get("bookmakers", []):
+                for mkt in bm.get("markets", []):
+                    if mkt.get("key") != "h2h":
+                        continue
+                    probs = {}
+                    for outcome in mkt.get("outcomes", []):
+                        american = outcome.get("price", 0)
+                        if american >= 100:
+                            p = 100 / (american + 100)
+                        else:
+                            p = abs(american) / (abs(american) + 100)
+                        probs[outcome["name"]] = p
+                    total = sum(probs.values())
+                    if total > 0:
+                        home_prob = round(probs.get(home, 0) / total, 3)
+                        result[(home, away)] = home_prob
+        print(f"  Vegas odds: {len(result)} games")
+        return result
+    except Exception as e:
+        print(f"  Odds API fetch failed: {e}")
+        return {}
+
+def find_vegas_prob(home_team, away_team, vegas_odds):
+    """Match full team names to Odds API entries (fuzzy last-word match)."""
+    direct = vegas_odds.get((home_team, away_team))
+    if direct is not None:
+        return direct
+    home_last = home_team.split()[-1].lower()
+    away_last = away_team.split()[-1].lower()
+    for (h, a), prob in vegas_odds.items():
+        if home_last in h.lower() and away_last in a.lower():
+            return prob
+    return None
+
 # ════════════════════════════════════════════════════════════════════════════
 # OUTCOMES — fill actual results for yesterday's logged rows
 # ════════════════════════════════════════════════════════════════════════════
 if MODE in ("outcomes", "morning", "nightly"):
     print("Filling outcomes for yesterday's games...")
     cur.execute("""
-        SELECT id, game_pk, home_team, away_team, model_pick, kalshi_pick, cycle_pick
+        SELECT id, game_pk, home_team, away_team, model_pick, kalshi_pick, cycle_pick, vegas_pick
         FROM kalshi_tracker
         WHERE game_date = %s AND actual_winner IS NULL AND game_pk IS NOT NULL
     """, (yesterday,))
     pending = cur.fetchall()
     print(f"  {len(pending)} rows need outcomes")
-    for row_id, game_pk, home_team, away_team, model_pick, kalshi_pick, cycle_pick in pending:
+    for row_id, game_pk, home_team, away_team, model_pick, kalshi_pick, cycle_pick, vegas_pick in pending:
         try:
             r = requests.get(f"https://statsapi.mlb.com/api/v1/game/{game_pk}/linescore")
             d = r.json()
@@ -162,13 +219,15 @@ if MODE in ("outcomes", "morning", "nightly"):
                     actual_winner  = %s,
                     model_correct  = %s,
                     kalshi_correct = %s,
-                    cycle_correct  = %s
+                    cycle_correct  = %s,
+                    vegas_correct  = %s
                 WHERE id = %s
             """, (
                 actual_winner,
                 model_pick  == actual_winner if model_pick  else None,
                 kalshi_pick == actual_winner if kalshi_pick else None,
                 cycle_pick  == actual_winner if cycle_pick  else None,
+                vegas_pick  == actual_winner if vegas_pick  else None,
                 row_id,
             ))
             print(f"  {home_team} vs {away_team}: {actual_winner}  model={'OK' if model_pick==actual_winner else 'WRONG'}")
@@ -298,6 +357,9 @@ if MODE in ("morning", "pregame"):
             })
     print(f"  {len(mlb_games)} games today")
 
+    # Fetch Vegas odds (morning only — one API call covers all games)
+    vegas_odds = fetch_vegas_odds() if MODE == "morning" else {}
+
     # Fetch Kalshi markets
     try:
         mk_data = kalshi_get("/markets?limit=200&series_ticker=KXMLBGAME&status=open")
@@ -340,17 +402,24 @@ if MODE in ("morning", "pregame"):
         if MODE == "morning":
             if abs(gap) < GAP_THRESH:
                 continue
+            vhp = find_vegas_prob(home_team, away_team, vegas_odds)
+            vap = round(1 - vhp, 3) if vhp is not None else None
+            vpick = ("home" if vhp >= 0.5 else "away") if vhp is not None else None
             try:
                 cur.execute("""
                     INSERT INTO kalshi_tracker
                     (game_date, season, home_team, away_team, game_pk,
                      model_home_prob, model_away_prob, model_pick, model_confidence,
                      kalshi_home_prob, kalshi_away_prob, kalshi_pick,
+                     vegas_home_prob, vegas_away_prob, vegas_pick,
                      prob_gap, signal_type, lineup_source, game_time_utc)
-                    VALUES (%s,%s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s, %s,%s,%s,%s)
+                    VALUES (%s,%s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s, %s,%s,%s, %s,%s,%s,%s)
                     ON CONFLICT (game_pk, game_date) DO UPDATE SET
                         model_home_prob  = EXCLUDED.model_home_prob,
                         kalshi_home_prob = EXCLUDED.kalshi_home_prob,
+                        vegas_home_prob  = EXCLUDED.vegas_home_prob,
+                        vegas_away_prob  = EXCLUDED.vegas_away_prob,
+                        vegas_pick       = EXCLUDED.vegas_pick,
                         prob_gap         = EXCLUDED.prob_gap,
                         signal_type      = EXCLUDED.signal_type,
                         lineup_source    = EXCLUDED.lineup_source
@@ -358,10 +427,12 @@ if MODE in ("morning", "pregame"):
                     today, SEASON, home_team, away_team, game_pk,
                     mhp, round(1-mhp,3), pick, conf,
                     khp, round(1-khp,3), "home" if khp >= 0.5 else "away",
+                    vhp, vap, vpick,
                     gap, sig, g["lineup_source"], g["game_time_utc"],
                 ))
                 logged += 1
-                print(f"  Morning: {away_team} @ {home_team}  gap={gap:+.2f}  {sig}")
+                vegas_str = f"  vegas={vhp}" if vhp is not None else "  vegas=n/a"
+                print(f"  Morning: {away_team} @ {home_team}  gap={gap:+.2f}  {sig}{vegas_str}")
             except Exception as e:
                 print(f"  ERR {home_team}: {e}")
 
