@@ -59,6 +59,17 @@ for col, typedef in [
     """)
 
 conn.commit()
+
+# Add cycle probability columns if they don't exist yet
+for col, typedef in [
+    ("cycle_home_prob", "NUMERIC(5,3)"),
+    ("cycle_away_prob", "NUMERIC(5,3)"),
+]:
+    cur.execute(f"""
+        ALTER TABLE kalshi_tracker ADD COLUMN IF NOT EXISTS {col} {typedef};
+    """)
+
+conn.commit()
 cur.close()
 conn.close()
-print("kalshi_tracker table ready (vegas columns added if missing)")
+print("kalshi_tracker table ready (cycle prob columns added if missing)")

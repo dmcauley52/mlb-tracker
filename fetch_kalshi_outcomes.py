@@ -694,10 +694,14 @@ if MODE in ("morning", "pregame"):
         home_ce = team_cycle_pick(home_team)
         away_ce = team_cycle_pick(away_team)
         if home_ce and away_ce:
-            ce_prob = cycle_edge_prob(home_ce['score'], away_ce['score'])
-            cpick   = "home" if ce_prob >= 0.5 else "away"
+            ce_prob        = cycle_edge_prob(home_ce['score'], away_ce['score'])
+            cpick          = "home" if ce_prob >= 0.5 else "away"
+            cycle_home_sc  = home_ce['score']
+            cycle_away_sc  = away_ce['score']
+            cycle_home_p   = ce_prob
         else:
             cpick = None
+            cycle_home_sc = cycle_away_sc = cycle_home_p = None
 
         # ── MORNING: insert row for every game (need Vegas for all games) ──
         if MODE == "morning":
@@ -713,27 +717,33 @@ if MODE in ("morning", "pregame"):
                      model_home_prob, model_away_prob, model_pick, model_confidence,
                      kalshi_home_prob, kalshi_away_prob, kalshi_pick,
                      vegas_home_prob, vegas_away_prob, vegas_pick,
-                     cycle_pick,
+                     cycle_pick, cycle_home_score, cycle_away_score, cycle_home_prob, cycle_away_prob,
                      prob_gap, signal_type, lineup_source, game_time_utc)
-                    VALUES (%s,%s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s, %s,%s,%s, %s, %s,%s,%s,%s)
+                    VALUES (%s,%s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s, %s,%s,%s, %s,%s,%s,%s,%s, %s,%s,%s,%s)
                     ON CONFLICT (game_pk, game_date) DO UPDATE SET
-                        model_home_prob  = EXCLUDED.model_home_prob,
-                        kalshi_home_prob = COALESCE(EXCLUDED.kalshi_home_prob, kalshi_tracker.kalshi_home_prob),
-                        kalshi_away_prob = COALESCE(EXCLUDED.kalshi_away_prob, kalshi_tracker.kalshi_away_prob),
-                        kalshi_pick      = COALESCE(EXCLUDED.kalshi_pick,      kalshi_tracker.kalshi_pick),
-                        vegas_home_prob  = COALESCE(EXCLUDED.vegas_home_prob,  kalshi_tracker.vegas_home_prob),
-                        vegas_away_prob  = COALESCE(EXCLUDED.vegas_away_prob,  kalshi_tracker.vegas_away_prob),
-                        vegas_pick       = COALESCE(EXCLUDED.vegas_pick,       kalshi_tracker.vegas_pick),
-                        cycle_pick       = COALESCE(EXCLUDED.cycle_pick,       kalshi_tracker.cycle_pick),
-                        prob_gap         = EXCLUDED.prob_gap,
-                        signal_type      = EXCLUDED.signal_type,
-                        lineup_source    = EXCLUDED.lineup_source
+                        model_home_prob   = EXCLUDED.model_home_prob,
+                        model_away_prob   = EXCLUDED.model_away_prob,
+                        kalshi_home_prob  = COALESCE(EXCLUDED.kalshi_home_prob, kalshi_tracker.kalshi_home_prob),
+                        kalshi_away_prob  = COALESCE(EXCLUDED.kalshi_away_prob, kalshi_tracker.kalshi_away_prob),
+                        kalshi_pick       = COALESCE(EXCLUDED.kalshi_pick,      kalshi_tracker.kalshi_pick),
+                        vegas_home_prob   = COALESCE(EXCLUDED.vegas_home_prob,  kalshi_tracker.vegas_home_prob),
+                        vegas_away_prob   = COALESCE(EXCLUDED.vegas_away_prob,  kalshi_tracker.vegas_away_prob),
+                        vegas_pick        = COALESCE(EXCLUDED.vegas_pick,       kalshi_tracker.vegas_pick),
+                        cycle_pick        = COALESCE(EXCLUDED.cycle_pick,       kalshi_tracker.cycle_pick),
+                        cycle_home_score  = COALESCE(EXCLUDED.cycle_home_score, kalshi_tracker.cycle_home_score),
+                        cycle_away_score  = COALESCE(EXCLUDED.cycle_away_score, kalshi_tracker.cycle_away_score),
+                        cycle_home_prob   = COALESCE(EXCLUDED.cycle_home_prob,  kalshi_tracker.cycle_home_prob),
+                        cycle_away_prob   = COALESCE(EXCLUDED.cycle_away_prob,  kalshi_tracker.cycle_away_prob),
+                        prob_gap          = EXCLUDED.prob_gap,
+                        signal_type       = EXCLUDED.signal_type,
+                        lineup_source     = EXCLUDED.lineup_source
                 """, (
                     game_date, SEASON, home_team, away_team, game_pk,
                     mhp, round(1-mhp,3), pick, conf,
                     khp, kap, kpick,
                     vhp, vap, vpick,
-                    cpick,
+                    cpick, cycle_home_sc, cycle_away_sc, cycle_home_p,
+                    round(1 - cycle_home_p, 3) if cycle_home_p is not None else None,
                     gap, sig, g["lineup_source"], g["game_time_utc"],
                 ))
                 logged += 1
