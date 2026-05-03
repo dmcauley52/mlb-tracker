@@ -1,9 +1,10 @@
 """
 fetch_kalshi_outcomes.py
-Three modes via MODE env var:
-  morning  (default) -- log today's disagreements with pre-game Kalshi prices
-  pregame            -- update rows for games starting in next 90 min with confirmed lineups
-  outcomes           -- fill actual outcomes for yesterday's logged rows
+Modes via MODE env var:
+  morning        (default) -- log today's games with model/cycle/kalshi/vegas picks
+  pregame                  -- update rows for games starting in next 90 min
+  outcomes                 -- fill actual outcomes for yesterday's logged rows
+  backfill-cycle           -- backfill cycle_pick + cycle_correct for historical rows
 
 Schedules:
   kalshi_morning.yml  14:00 UTC (10 AM ET)      -- MODE=morning
@@ -391,6 +392,97 @@ if MODE in ("outcomes", "morning", "nightly"):
         except Exception as e:
             print(f"  ERR game {game_pk}: {e}")
     conn.commit()
+
+# ════════════════════════════════════════════════════════════════════════════
+# BACKFILL-CYCLE — compute cycle_pick + cycle_correct for historical rows
+# ════════════════════════════════════════════════════════════════════════════
+if MODE == "backfill-cycle":
+    print("Backfilling cycle_pick for historical rows...")
+
+    # Load player gamelogs for cycle scoring
+    cur.execute("""
+        SELECT player_name, team, game_date, batting_avg, woba, ops
+        FROM player_gamelogs
+        WHERE season = %s AND at_bats >= 1
+        ORDER BY player_name, game_date ASC
+    """, (SEASON,))
+    _bf_logs = {}
+    for name, team, gdate, avg, woba, ops in cur.fetchall():
+        _bf_logs.setdefault(name, {'team': team, 'games': []})
+        _bf_logs[name]['games'].append({
+            'avg':  float(avg  or 0),
+            'woba': float(woba or 0) if woba else None,
+        })
+
+    cur.execute("""
+        SELECT DISTINCT ON (player_name) player_name, ops
+        FROM player_gamelogs
+        WHERE season = %s AND ops IS NOT NULL
+        ORDER BY player_name, game_date DESC
+    """, (SEASON,))
+    _bf_ops = {r[0]: float(r[1]) for r in cur.fetchall() if r[1]}
+
+    cur.execute("""
+        SELECT player_name,
+               COALESCE(
+                   AVG(woba) FILTER (WHERE woba > 0 AND game_date >= current_date - 21) * 0.6
+                   + AVG(woba) FILTER (WHERE woba > 0) * 0.4,
+                   AVG(woba) FILTER (WHERE woba > 0)
+               ) AS avg_woba
+        FROM player_gamelogs
+        WHERE season = %s AND woba IS NOT NULL
+        GROUP BY player_name HAVING COUNT(*) >= 5
+    """, (SEASON,))
+    _bf_woba = {r[0]: float(r[1]) for r in cur.fetchall() if r[1]}
+
+    def _bf_cycle_pick(team_name):
+        players = [(n, _bf_woba.get(n, 0))
+                   for n, info in _bf_logs.items()
+                   if info['team'] == team_name and n in _bf_woba]
+        players.sort(key=lambda x: -x[1])
+        top9 = [n for n, _ in players[:9]]
+        if len(top9) < 3:
+            return None
+        scores = []
+        for name in top9:
+            info = _bf_logs.get(name)
+            if not info:
+                continue
+            games = info['games'][-40:]
+            ops   = _bf_ops.get(name, 0.720)
+            scores.append(compute_player_score(games, ops))
+        return compute_cycle_edge(scores)
+
+    # Fetch rows missing cycle_pick
+    cur.execute("""
+        SELECT id, home_team, away_team, actual_winner
+        FROM kalshi_tracker
+        WHERE cycle_pick IS NULL
+        ORDER BY game_date ASC
+    """)
+    rows = cur.fetchall()
+    print(f"  {len(rows)} rows need cycle_pick")
+
+    updated = 0
+    for row_id, home_team, away_team, actual_winner in rows:
+        home_ce = _bf_cycle_pick(home_team)
+        away_ce = _bf_cycle_pick(away_team)
+        if not home_ce or not away_ce:
+            continue
+        ce_prob = cycle_edge_prob(home_ce['score'], away_ce['score'])
+        cpick   = "home" if ce_prob >= 0.5 else "away"
+        ccorrect = (cpick == actual_winner) if actual_winner else None
+        cur.execute("""
+            UPDATE kalshi_tracker
+            SET cycle_pick    = %s,
+                cycle_correct = %s
+            WHERE id = %s
+        """, (cpick, ccorrect, row_id))
+        updated += 1
+        print(f"  {away_team} @ {home_team}: cycle={cpick}  correct={ccorrect}")
+
+    conn.commit()
+    print(f"  {updated} rows updated")
 
 # ════════════════════════════════════════════════════════════════════════════
 # MORNING + PREGAME — fetch schedule, run model, compare Kalshi
