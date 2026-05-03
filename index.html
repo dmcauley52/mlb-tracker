@@ -606,14 +606,15 @@
       // Edge strength classification — gap must be in model's favor (market underpricing)
       // Strong: 3+ signals agree AND model sees ≥10pp of underpricing
       // Moderate: 2+ agree AND ≥8pp underpricing
-      // Watch: 2+ agree but gap is small or missing
-      // None: signals split or market already overprices model's pick
+      // Watch: 2+ agree but gap is small or no market data
+      // None: signals split OR market already overprices model's pick (gapPct ≤ 0)
+      const marketUnderprices = favoredGap == null || favoredGap > 0;
       const edgeStrength = (() => {
         if (isLive) return 'live';
+        if (!marketUnderprices) return 'none'; // market already overprices — no value regardless of signal count
         if (agreeCount >= 3 && gapPct >= 10) return 'strong';
         if (agreeCount >= 2 && gapPct >= 8) return 'moderate';
-        if (agreeCount >= 2 && gapPct > 0) return 'watch';
-        if (agreeCount >= 2 && favoredGap == null) return 'watch';
+        if (agreeCount >= 2) return 'watch'; // positive gap but small, or no market data
         return 'none';
       })();
 
