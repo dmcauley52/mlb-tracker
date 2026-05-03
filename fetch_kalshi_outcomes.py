@@ -63,6 +63,7 @@ def kalshi_get(path):
 conn = psycopg2.connect(os.getenv("DATABASE_URL"))
 cur  = conn.cursor()
 today     = date.today()
+tomorrow  = today + timedelta(days=1)
 yesterday = today - timedelta(days=1)
 now_utc   = datetime.now(timezone.utc)
 
@@ -281,13 +282,14 @@ if MODE in ("morning", "pregame"):
         wobas = sorted(team_roster_woba.get(team_name, []), reverse=True)[:9]
         return round(sum(wobas) / len(wobas), 4) if wobas else 0.320
 
-    # MLB schedule
+    # MLB schedule — today + tomorrow
     sched_r = requests.get(
         f"https://statsapi.mlb.com/api/v1/schedule?sportId=1"
-        f"&startDate={today}&endDate={today}&hydrate=probablePitcher,teams"
+        f"&startDate={today}&endDate={tomorrow}&hydrate=probablePitcher,teams"
     )
     mlb_games = []
     for d in (sched_r.json().get("dates") or []):
+        game_date_str = d.get("date", str(today))
         for g in d.get("games", []):
             if g.get("status", {}).get("abstractGameState") == "Final":
                 continue
@@ -345,17 +347,18 @@ if MODE in ("morning", "pregame"):
                 pass
 
             mlb_games.append({
-                "game_pk":         g["gamePk"],
-                "home_team":       home_name,
-                "away_team":       away_name,
-                "home_sp_era":     home_sp_era,
-                "away_sp_era":     away_sp_era,
+                "game_pk":          g["gamePk"],
+                "game_date":        game_date_str,
+                "home_team":        home_name,
+                "away_team":        away_name,
+                "home_sp_era":      home_sp_era,
+                "away_sp_era":      away_sp_era,
                 "home_lineup_woba": home_lineup_woba,
                 "away_lineup_woba": away_lineup_woba,
-                "lineup_source":   lineup_source,
-                "game_time_utc":   g.get("gameDate"),
+                "lineup_source":    lineup_source,
+                "game_time_utc":    g.get("gameDate"),
             })
-    print(f"  {len(mlb_games)} games today")
+    print(f"  {len(mlb_games)} games (today + tomorrow)")
 
     # Fetch Vegas odds (morning only — one API call covers all games)
     vegas_odds = fetch_vegas_odds() if MODE == "morning" else {}
@@ -378,6 +381,7 @@ if MODE in ("morning", "pregame"):
     logged = 0
     for g in mlb_games:
         game_pk   = g["game_pk"]
+        game_date = g["game_date"]
         home_team = g["home_team"]
         away_team = g["away_team"]
 
@@ -392,7 +396,7 @@ if MODE in ("morning", "pregame"):
         pick = "home" if mhp >= 0.5 else "away"
         sig  = "strong_edge" if conf >= 0.25 else "disagreement"
 
-        khp = find_kalshi_prob(home_team, away_team, today, events, mkt_by_event)
+        khp = find_kalshi_prob(home_team, away_team, game_date, events, mkt_by_event)
         gap = round(mhp - khp, 3) if khp is not None else None
 
         # ── MORNING: insert row for every game (need Vegas for all games) ──
@@ -423,7 +427,7 @@ if MODE in ("morning", "pregame"):
                         signal_type      = EXCLUDED.signal_type,
                         lineup_source    = EXCLUDED.lineup_source
                 """, (
-                    today, SEASON, home_team, away_team, game_pk,
+                    game_date, SEASON, home_team, away_team, game_pk,
                     mhp, round(1-mhp,3), pick, conf,
                     khp, kap, kpick,
                     vhp, vap, vpick,
@@ -466,7 +470,7 @@ if MODE in ("morning", "pregame"):
                     mhp, round(1-mhp,3),
                     khp, round(1-khp,3) if khp is not None else None,
                     pick, sig, g["lineup_source"],
-                    game_pk, today,
+                    game_pk, game_date,
                 ))
                 if cur.rowcount:
                     logged += 1
