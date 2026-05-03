@@ -1034,7 +1034,7 @@
       React.useEffect(() => {
         if (!sbUrl || !sbKey) return;
         sbFetch(sbUrl, sbKey,
-          `kalshi_tracker?select=game_pk,game_date,home_team,away_team,model_pick,kalshi_pick,cycle_pick,vegas_pick,prob_gap,signal_type,model_confidence,model_correct,kalshi_correct,cycle_correct,vegas_correct,actual_winner,pregame_model_home_prob,pregame_kalshi_home_prob,pregame_signal_type,lineup_source,vegas_home_prob&order=game_date.desc&limit=100`
+          `kalshi_tracker?select=game_pk,game_date,home_team,away_team,model_pick,kalshi_pick,cycle_pick,vegas_pick,prob_gap,signal_type,model_confidence,model_correct,kalshi_correct,cycle_correct,vegas_correct,actual_winner,pregame_model_home_prob,pregame_kalshi_home_prob,pregame_signal_type,lineup_source,vegas_home_prob,kalshi_home_prob,kalshi_away_prob&order=game_date.desc&limit=100`
         ).then(rows => { if (rows?.length) setTracker(rows); }).catch(() => {});
       }, [sbUrl, sbKey]);
 
@@ -1197,6 +1197,207 @@
                     </div>
                   </div>
                 )}
+
+                {/* ── Daily W/L % + Cumulative P&L charts ── */}
+                {resolved.length >= 2 && (()=>{
+                  // Sort ascending by date
+                  const byDate = [...resolved].sort((a,b) => a.game_date < b.game_date ? -1 : 1);
+
+                  // Build daily buckets: { date, model, kalshi, cycle, vegas, count }
+                  const buckets = {};
+                  byDate.forEach(r => {
+                    if (!buckets[r.game_date]) buckets[r.game_date] = {date:r.game_date,model:[],kalshi:[],cycle:[],vegas:[]};
+                    const b = buckets[r.game_date];
+                    if (r.model_correct  != null) b.model.push(r.model_correct);
+                    if (r.kalshi_correct != null) b.kalshi.push(r.kalshi_correct);
+                    if (r.cycle_correct  != null) b.cycle.push(r.cycle_correct);
+                    if (r.vegas_correct  != null) b.vegas.push(r.vegas_correct);
+                  });
+                  const days = Object.values(buckets).sort((a,b) => a.date < b.date ? -1 : 1);
+                  const winPct = arr => arr.length ? Math.round(arr.filter(Boolean).length / arr.length * 100) : null;
+
+                  // Cumulative $10 Kalshi P&L: bet $10 on the kalshi_pick each flagged game
+                  // Payout on a $10 bet at implied prob p: win → +10*(1-p)/p, lose → -10
+                  // Use pregame_kalshi_home_prob if available, else kalshi_home_prob
+                  let cumPnl = 0;
+                  const pnlByDate = {};
+                  byDate.forEach(r => {
+                    const khp = parseFloat(r.pregame_kalshi_home_prob ?? r.kalshi_home_prob ?? 0);
+                    const kap = khp > 0 ? parseFloat((1 - khp).toFixed(3)) : 0;
+                    if (!khp || !r.kalshi_pick || r.kalshi_correct == null) return;
+                    const betProb = r.kalshi_pick === 'home' ? khp : kap;
+                    if (betProb <= 0 || betProb >= 1) return;
+                    const profit = r.kalshi_correct ? +(10 * (1 - betProb) / betProb).toFixed(2) : -10;
+                    cumPnl = +(cumPnl + profit).toFixed(2);
+                    if (!pnlByDate[r.game_date] || cumPnl > pnlByDate[r.game_date]) {
+                      pnlByDate[r.game_date] = cumPnl;
+                    }
+                  });
+                  // Final cumPnl per day (last value of that day)
+                  let running = 0;
+                  const pnlPoints = [];
+                  byDate.forEach(r => {
+                    const khp = parseFloat(r.pregame_kalshi_home_prob ?? r.kalshi_home_prob ?? 0);
+                    const kap = khp > 0 ? parseFloat((1 - khp).toFixed(3)) : 0;
+                    if (!khp || !r.kalshi_pick || r.kalshi_correct == null) return;
+                    const betProb = r.kalshi_pick === 'home' ? khp : kap;
+                    if (betProb <= 0 || betProb >= 1) return;
+                    const profit = r.kalshi_correct ? +(10 * (1 - betProb) / betProb).toFixed(2) : -10;
+                    running = +(running + profit).toFixed(2);
+                    pnlPoints.push({date: r.game_date, pnl: running});
+                  });
+
+                  // Chart dimensions
+                  const W = 560, H = 120, PX = 40, PY = 12;
+                  const cW = W - PX, cH = H - PY * 2;
+
+                  // Win% chart
+                  const signals = [
+                    {key:'model',  color:'#3b82f6', label:'Model'},
+                    {key:'cycle',  color:'#6366f1', label:'Cycle'},
+                    {key:'vegas',  color:'#10b981', label:'Vegas'},
+                    {key:'kalshi', color:'#f59e0b', label:'Kalshi'},
+                  ];
+                  const allPcts = days.flatMap(d => signals.map(s => winPct(d[s.key]))).filter(v=>v!=null);
+                  const minPct = Math.max(0, Math.min(...allPcts) - 10);
+                  const maxPct = Math.min(100, Math.max(...allPcts) + 10);
+                  const xScale = i => PX + (i / Math.max(days.length - 1, 1)) * cW;
+                  const yScalePct = v => PY + (1 - (v - minPct) / (maxPct - minPct)) * cH;
+
+                  const polyline = (s) => {
+                    const pts = days.map((d,i) => {
+                      const v = winPct(d[s.key]);
+                      return v != null ? `${xScale(i)},${yScalePct(v)}` : null;
+                    }).filter(Boolean);
+                    return pts.length >= 2 ? pts.join(' ') : null;
+                  };
+
+                  // P&L chart
+                  const pnlVals = pnlPoints.map(p => p.pnl);
+                  const minPnl = Math.min(0, ...pnlVals) - 2;
+                  const maxPnl = Math.max(0, ...pnlVals) + 2;
+                  const yScalePnl = v => PY + (1 - (v - minPnl) / (maxPnl - minPnl)) * cH;
+                  const zeroY = yScalePnl(0);
+                  // Map pnl points to x using days index
+                  const dateToX = {};
+                  days.forEach((d,i) => { dateToX[d.date] = xScale(i); });
+                  const pnlPoly = pnlPoints
+                    .filter(p => dateToX[p.date] != null)
+                    .map(p => `${dateToX[p.date]},${yScalePnl(p.pnl)}`).join(' ');
+                  const lastPnl = pnlPoints.length ? pnlPoints[pnlPoints.length-1].pnl : null;
+
+                  return (
+                    <div style={{marginTop:16,display:'flex',flexDirection:'column',gap:12}}>
+                      {/* Win% chart */}
+                      <div style={{background:'#0f172a',borderRadius:8,padding:'12px 14px'}}>
+                        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                          <span style={{fontSize:10,fontWeight:700,color:'#475569',textTransform:'uppercase',letterSpacing:0.5}}>
+                            Daily Win % by Signal
+                          </span>
+                          <div style={{display:'flex',gap:10}}>
+                            {signals.map(s => (
+                              <div key={s.key} style={{display:'flex',alignItems:'center',gap:4}}>
+                                <div style={{width:10,height:2,background:s.color,borderRadius:1}}/>
+                                <span style={{fontSize:9,color:s.color}}>{s.label}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        <svg viewBox={`0 0 ${W} ${H}`} style={{width:'100%',height:H,overflow:'visible'}}>
+                          {/* 50% reference line */}
+                          {minPct <= 50 && maxPct >= 50 && (
+                            <>
+                              <line x1={PX} y1={yScalePct(50)} x2={W} y2={yScalePct(50)}
+                                stroke="#334155" strokeWidth="1" strokeDasharray="3,3"/>
+                              <text x={PX-2} y={yScalePct(50)+4} fontSize="8" fill="#475569" textAnchor="end">50%</text>
+                            </>
+                          )}
+                          {/* Y axis labels */}
+                          {[minPct, maxPct].map(v => (
+                            <text key={v} x={PX-2} y={yScalePct(v)+4} fontSize="8" fill="#334155" textAnchor="end">
+                              {Math.round(v)}%
+                            </text>
+                          ))}
+                          {/* X axis date labels */}
+                          {days.filter((_,i) => i===0 || i===days.length-1 || (days.length>4 && i===Math.floor(days.length/2))).map((d,_,arr) => {
+                            const i = days.indexOf(d);
+                            return <text key={d.date} x={xScale(i)} y={H} fontSize="7" fill="#334155" textAnchor="middle">{d.date.slice(5)}</text>;
+                          })}
+                          {/* Signal lines */}
+                          {signals.map(s => {
+                            const pts = polyline(s);
+                            if (!pts) return null;
+                            return (
+                              <g key={s.key}>
+                                <polyline points={pts} fill="none" stroke={s.color} strokeWidth="1.5" strokeLinejoin="round"/>
+                                {days.map((d,i) => {
+                                  const v = winPct(d[s.key]);
+                                  return v != null ? <circle key={i} cx={xScale(i)} cy={yScalePct(v)} r="2.5" fill={s.color}/> : null;
+                                })}
+                              </g>
+                            );
+                          })}
+                        </svg>
+                      </div>
+
+                      {/* P&L chart */}
+                      {pnlPoints.length >= 2 && (
+                        <div style={{background:'#0f172a',borderRadius:8,padding:'12px 14px'}}>
+                          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                            <span style={{fontSize:10,fontWeight:700,color:'#475569',textTransform:'uppercase',letterSpacing:0.5}}>
+                              Cumulative P&amp;L — $10/game on Kalshi pick
+                            </span>
+                            {lastPnl != null && (
+                              <span style={{fontSize:12,fontWeight:800,color:lastPnl>=0?'#22c55e':'#ef4444'}}>
+                                {lastPnl>=0?'+':''}{lastPnl.toFixed(2)}
+                              </span>
+                            )}
+                          </div>
+                          <svg viewBox={`0 0 ${W} ${H}`} style={{width:'100%',height:H,overflow:'visible'}}>
+                            {/* Zero line */}
+                            <line x1={PX} y1={zeroY} x2={W} y2={zeroY}
+                              stroke="#334155" strokeWidth="1" strokeDasharray="3,3"/>
+                            <text x={PX-2} y={zeroY+4} fontSize="8" fill="#475569" textAnchor="end">$0</text>
+                            {/* Y axis labels */}
+                            {[minPnl, maxPnl].map(v => (
+                              <text key={v} x={PX-2} y={yScalePnl(v)+4} fontSize="8" fill="#334155" textAnchor="end">
+                                ${v.toFixed(0)}
+                              </text>
+                            ))}
+                            {/* X axis date labels */}
+                            {days.filter((_,i) => i===0 || i===days.length-1 || (days.length>4 && i===Math.floor(days.length/2))).map(d => {
+                              const i = days.indexOf(d);
+                              return <text key={d.date} x={xScale(i)} y={H} fontSize="7" fill="#334155" textAnchor="middle">{d.date.slice(5)}</text>;
+                            })}
+                            {/* Shaded area under curve */}
+                            {pnlPoly && (() => {
+                              const firstX = dateToX[pnlPoints[0].date];
+                              const lastX  = dateToX[pnlPoints[pnlPoints.length-1].date];
+                              return (
+                                <polygon
+                                  points={`${firstX},${zeroY} ${pnlPoly} ${lastX},${zeroY}`}
+                                  fill={lastPnl >= 0 ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)'}/>
+                              );
+                            })()}
+                            {/* P&L line */}
+                            {pnlPoly && (
+                              <polyline points={pnlPoly} fill="none"
+                                stroke={lastPnl >= 0 ? '#22c55e' : '#ef4444'}
+                                strokeWidth="2" strokeLinejoin="round"/>
+                            )}
+                            {/* End dot */}
+                            {pnlPoints.length > 0 && (() => {
+                              const last = pnlPoints[pnlPoints.length-1];
+                              const lx = dateToX[last.date];
+                              return lx != null ? <circle cx={lx} cy={yScalePnl(last.pnl)} r="3"
+                                fill={last.pnl >= 0 ? '#22c55e' : '#ef4444'}/> : null;
+                            })()}
+                          </svg>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* Recent rows */}
                 {resolved.length > 0 && (
