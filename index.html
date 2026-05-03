@@ -587,25 +587,33 @@
       const edgeFav       = modelFav; // model is anchor; agreement bolsters it
       const edgeTeamAbbr  = edgeFav === 'home' ? g.homeAbbr : g.awayAbbr;
 
-      // Market gap: biggest gap between model and any market source (Kalshi preferred, Vegas fallback)
+      // Market gap: model minus market on the HOME team (positive = model likes home more than market)
       const homeGap = (kalshiHomeProb != null && modelHomeProb != null)
         ? +(modelHomeProb - kalshiHomeProb).toFixed(3) : null;
       const vegasGap = (vegasHomeP != null && modelHomeProb != null)
         ? +(modelHomeProb - vegasHomeP).toFixed(3) : null;
       // Use whichever gap is available; Kalshi preferred
       const bestGap = homeGap ?? vegasGap;
-      const gapPct  = bestGap != null ? Math.abs(bestGap * 100) : 0;
 
-      // Edge strength classification
-      // Strong: 3+ signals agree AND gap ≥ 10pp  OR  all 4 agree
-      // Moderate: 2+ agree AND gap ≥ 8pp
-      // Weak: otherwise
+      // favoredGap: gap in the direction of the model's favorite
+      // Positive = model thinks favorite is underpriced (value bet)
+      // Negative = market overprices the model's favorite (no value)
+      const favoredGap = bestGap != null
+        ? (modelFav === 'home' ? bestGap : -bestGap)
+        : null;
+      const gapPct = favoredGap != null ? favoredGap * 100 : 0;
+
+      // Edge strength classification — gap must be in model's favor (market underpricing)
+      // Strong: 3+ signals agree AND model sees ≥10pp of underpricing
+      // Moderate: 2+ agree AND ≥8pp underpricing
+      // Watch: 2+ agree but gap is small or missing
+      // None: signals split or market already overprices model's pick
       const edgeStrength = (() => {
         if (isLive) return 'live';
         if (agreeCount >= 3 && gapPct >= 10) return 'strong';
-        if (agreeCount === signalCount && signalCount >= 3) return 'strong';
         if (agreeCount >= 2 && gapPct >= 8) return 'moderate';
-        if (agreeCount >= 2) return 'watch';
+        if (agreeCount >= 2 && gapPct > 0) return 'watch';
+        if (agreeCount >= 2 && favoredGap == null) return 'watch';
         return 'none';
       })();
 
@@ -888,11 +896,13 @@
                   <div style={{marginTop:8,paddingTop:6,borderTop:'1px solid #1e293b',
                     display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
                     <span style={{fontSize:9,color:'#475569',textTransform:'uppercase',letterSpacing:0.5}}>Market gap</span>
-                    <span style={{fontSize:12,fontWeight:700,color: gapPct >= 10 ? ec.badge : '#64748b'}}>
-                      {bestGap > 0 ? '+' : ''}{(bestGap*100).toFixed(0)}pp
+                    <span style={{fontSize:12,fontWeight:700,color: gapPct >= 10 ? ec.badge : gapPct > 0 ? '#64748b' : '#ef4444'}}>
+                      {favoredGap > 0 ? '+' : ''}{gapPct.toFixed(0)}pp
                     </span>
                     <span style={{fontSize:9,color:'#475569'}}>
-                      model {bestGap > 0 ? `favors ${g.homeAbbr}` : `favors ${g.awayAbbr}`} more than market
+                      {favoredGap > 0
+                        ? `market underprices ${edgeTeamAbbr} — potential value`
+                        : `market overprices ${edgeTeamAbbr} — no value`}
                     </span>
                     {homeGap != null && vegasGap != null && (
                       <span style={{fontSize:9,color:'#334155',marginLeft:'auto'}}>
