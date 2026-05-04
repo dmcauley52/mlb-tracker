@@ -1169,6 +1169,13 @@
       );
       const col = v => v==null?'#475569':v>=60?'#22c55e':v>=50?'#f59e0b':'#ef4444';
 
+      const overallSources = [
+        {label:'Model',  key:'model_correct',  color:'#3b82f6'},
+        {label:'Cycle',  key:'cycle_correct',  color:'#6366f1'},
+        {label:'Kalshi', key:'kalshi_correct', color:'#f59e0b'},
+        {label:'Vegas',  key:'vegas_correct',  color:'#10b981'},
+      ];
+
       return (
         <div style={{background:'#1e293b',borderRadius:12,padding:16,marginTop:16}}>
           <div style={{fontWeight:700,fontSize:13,color:'#f1f5f9',marginBottom:4}}>
@@ -1177,6 +1184,41 @@
           <div style={{fontSize:11,color:'#475569',marginBottom:14}}>
             Tracks flagged games (≥10% gap) · outcomes filled next day · {resolved.length} resolved so far
           </div>
+
+          {/* ── Overall success rate banner ── */}
+          {resolved.length > 0 && (
+            <div style={{background:'#0f172a',borderRadius:8,padding:'10px 16px',marginBottom:16,display:'flex',gap:0,flexWrap:'wrap'}}>
+              <div style={{fontSize:9,fontWeight:700,color:'#475569',textTransform:'uppercase',letterSpacing:0.5,width:'100%',marginBottom:10}}>
+                Overall Success Rate — all {resolved.length} resolved games
+              </div>
+              {overallSources.map(src => {
+                const eligible = src.key === 'vegas_correct'
+                  ? resolved.filter(r => r[src.key] != null)
+                  : resolved;
+                const wins = eligible.filter(r => r[src.key]).length;
+                const rate = eligible.length ? Math.round(wins / eligible.length * 100) : null;
+                const barColor = rate == null ? '#1e293b' : rate >= 60 ? '#22c55e' : rate >= 50 ? '#f59e0b' : '#ef4444';
+                return (
+                  <div key={src.key} style={{flex:1,minWidth:100,textAlign:'center',padding:'0 8px',borderRight:'1px solid #1e293b'}}>
+                    <div style={{fontSize:9,color:src.color,fontWeight:700,marginBottom:6,textTransform:'uppercase',letterSpacing:0.4}}>
+                      {src.label}
+                    </div>
+                    <div style={{fontSize:28,fontWeight:900,color:barColor,lineHeight:1}}>
+                      {rate != null ? rate + '%' : '—'}
+                    </div>
+                    <div style={{fontSize:9,color:'#334155',marginTop:3}}>
+                      {eligible.length ? `${wins} / ${eligible.length}` : 'no data'}
+                    </div>
+                    <div style={{marginTop:6,height:3,borderRadius:2,background:'#1e293b'}}>
+                      {rate != null && (
+                        <div style={{height:'100%',borderRadius:2,width:rate+'%',background:barColor,transition:'width 0.4s'}}/>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
                 {resolved.length === 0 && (
                   <div style={{color:'#475569',fontSize:12,padding:'12px 0'}}>
