@@ -314,13 +314,22 @@
             return <span key={i} style={{color:c}}>{opp}{i<pred.opponents.length-1?', ':''}</span>;
           })}</span>
         : "TBD";
+      const bd = pred.breakdown || {};
+      const nextGame = pred.matchupDetails?.find(d=>d!=null);
+      const parkNote = nextGame?.venueAbbr ? `${nextGame.venueAbbr} (${nextGame.parkFactor>=1?'+':''}${((nextGame.parkFactor||1)-1)*100|0}%)` : null;
+      const homeAwayNote = nextGame?.isHome!=null ? (nextGame.isHome ? 'home game' : 'road game') : null;
       const rows = [
-        ["Cycle phase",        pred.breakdown.phaseScore,    30, pred.phaseLabel||null],
-        ["Last-5 avg trend",   pred.breakdown.trendScore,    25, null],
-        ["Season OPS",         pred.breakdown.opsScore,      20, null],
-        ["10-game momentum",   pred.breakdown.momentumScore, 15, null],
-        ["Matchup quality",    pred.breakdown.matchupScore,  10, matchupNote],
+        ["Cycle phase",        bd.phaseScore,    30, pred.phaseLabel||null],
+        ["Last-5 avg trend",   bd.trendScore,    25, null],
+        ["Season OPS",         bd.opsScore,      20, null],
+        ["10-game momentum",   bd.momentumScore, 15, null],
+        ["Matchup quality",    bd.matchupScore,  10, matchupNote],
       ];
+      const bonusRows = [
+        ["Park factor",   bd.parkScore,     4, parkNote],
+        ["Home/away",     bd.homeAwayScore, 4, homeAwayNote],
+        ["Fatigue",       bd.fatigueScore,  0, bd.fatigueScore<0?`${bd.fatigueScore} pts penalty`:null],
+      ].filter(([,val])=> val !== undefined && val !== 0);
       return(
         <div style={{background:"#0f172a",borderRadius:10,padding:16}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
