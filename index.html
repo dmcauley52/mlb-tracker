@@ -358,6 +358,35 @@
               </div>
             </div>
           ))}
+          {bonusRows.length>0&&(
+            <div style={{borderTop:'1px solid #1e293b',paddingTop:8,marginBottom:4}}>
+              <div style={{fontSize:9,color:'#334155',fontWeight:700,textTransform:'uppercase',letterSpacing:0.5,marginBottom:8}}>Context adjustments</div>
+              {bonusRows.map(([lbl,val,,note])=>{
+                const isNeg = val < 0;
+                const bonusColor = isNeg ? '#ef4444' : val >= 3 ? '#22c55e' : '#f59e0b';
+                return (
+                  <div key={lbl} style={{marginBottom:8}}>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"#64748b",marginBottom:3}}>
+                      <span>{lbl}{note?<span style={{color:"#475569",marginLeft:5}}>· {note}</span>:""}</span>
+                      <span style={{fontWeight:700,color:bonusColor}}>{val>0?'+':''}{val}</span>
+                    </div>
+                    <div style={{height:4,background:"#1e293b",borderRadius:4,overflow:"hidden",position:'relative'}}>
+                      <div style={{
+                        position:'absolute',
+                        width:`${Math.abs(val)/5*100}%`,
+                        height:'100%',
+                        background:bonusColor,
+                        borderRadius:4,
+                        left: isNeg ? 'auto' : '50%',
+                        right: isNeg ? '50%' : 'auto',
+                      }}/>
+                      <div style={{position:'absolute',left:'50%',top:0,width:1,height:'100%',background:'#334155'}}/>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
           {pred.consistency!=null&&(()=>{
             const c = pred.consistency;
             const label = c>=70?'Reliable · low variance':c<=30?'Streaky · high variance':'Average variance';
