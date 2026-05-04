@@ -2770,7 +2770,8 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
               }
               const analysis = analyzePlayerCycles(games);
               if(analysis) games = applyPhaseColoring(games,analysis);
-              const pred = computePredictionScore(player.player_name,player.team,games,ss,null,hitterSplits);
+              const schedData = await fetchUpcomingSchedule(player.team).catch(()=>null);
+              const pred = computePredictionScore(player.player_name,player.team,games,ss,schedData,hitterSplits);
               if(batchRunId.current!==runId) return;
               setPredCache(prev=>({...prev,[player.player_name]:pred}));
             }catch(e){}
