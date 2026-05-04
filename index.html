@@ -315,26 +315,14 @@
           })}</span>
         : "TBD";
       const bd = pred.breakdown || {};
-      const nextGame = pred.matchupDetails?.find(d=>d!=null);
-      const parkNote = nextGame?.venueAbbr ? `${nextGame.venueAbbr} (${nextGame.parkFactor>=1?'+':''}${((nextGame.parkFactor||1)-1)*100|0}%)` : null;
-      const homeAwayNote = nextGame?.isHome!=null ? (nextGame.isHome ? 'home game' : 'road game') : null;
+      const nextGame = pred.nextGame || pred.matchupDetails?.find(d=>d!=null);
       const rows = [
         ["Cycle phase",        bd.phaseScore,    30, pred.phaseLabel||null],
         ["Last-5 avg trend",   bd.trendScore,    25, null],
         ["Season OPS",         bd.opsScore,      20, null],
         ["10-game momentum",   bd.momentumScore, 15, null],
         ["Matchup quality",    bd.matchupScore,  10, matchupNote],
-      ];
-      const bonusRows = [
-        // Show park/home-away whenever we have schedule data (even 0 = neutral is informative)
-        ...(nextGame ? [
-          ["Park factor",  bd.parkScore     ?? 0, 4, parkNote],
-          ["Home/away",    bd.homeAwayScore ?? 0, 4, homeAwayNote],
-        ] : []),
-        // Only show fatigue when there's an actual penalty
-        ...(bd.fatigueScore < 0 ? [
-          ["Fatigue", bd.fatigueScore, 0, `${bd.fatigueScore} pts`],
-        ] : []),
+        ...(bd.fatigueScore < 0 ? [["Fatigue penalty", bd.fatigueScore, 0, `${bd.fatigueScore} pts`]] : []),
       ];
       return(
         <div style={{background:"#0f172a",borderRadius:10,padding:16}}>
