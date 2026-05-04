@@ -2703,23 +2703,30 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
             if(batchRunId.current!==runId) return;
             const player = prioritized[idx++];
             try{
-              let games=[], ss=null;
+              let games=[], ss=null, hitterSplits=null;
+              const pid = player.mlbId||MLB_IDS[player.player_name];
               if(dataSource==="live"){
                 const rows = await fetchPlayerGames(sbUrl,sbKey,player.player_name);
                 if(!rows.length){ done++; setBatchProgress({done,total:prioritized.length}); continue; }
                 games = transformRows(rows);
+                // Fetch home/away splits in parallel with schedule (both need mlbId)
+                if(pid) hitterSplits = await fetchHitterSplits(pid).catch(()=>null);
               }else{
-                const pid = player.mlbId||MLB_IDS[player.player_name];
                 if(!pid){ done++; setBatchProgress({done,total:prioritized.length}); continue; }
-                const[splits,ssRaw] = await Promise.all([mlbFetchGameLog(pid),mlbFetchSeasonStats(pid)]);
+                const[splits,ssRaw,homeSplits] = await Promise.all([
+                  mlbFetchGameLog(pid),
+                  mlbFetchSeasonStats(pid),
+                  fetchHitterSplits(pid).catch(()=>null),
+                ]);
                 const t = transformMLBSplits(splits);
                 if(!t.length){ done++; setBatchProgress({done,total:prioritized.length}); continue; }
                 games=t;
                 ss={avg:ssRaw.avg||".---",ops:ssRaw.ops||".---",hr:ssRaw.homeRuns||0,rbi:ssRaw.rbi||0,hits:ssRaw.hits||0,ab:ssRaw.atBats||0,games:ssRaw.gamesPlayed||0,team:player.team};
+                hitterSplits = homeSplits;
               }
               const analysis = analyzePlayerCycles(games);
               if(analysis) games = applyPhaseColoring(games,analysis);
-              const pred = computePredictionScore(player.player_name,player.team,games,ss);
+              const pred = computePredictionScore(player.player_name,player.team,games,ss,null,hitterSplits);
               if(batchRunId.current!==runId) return;
               setPredCache(prev=>({...prev,[player.player_name]:pred}));
             }catch(e){}
