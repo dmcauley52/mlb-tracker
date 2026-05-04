@@ -45,6 +45,42 @@ var UPCOMING_SCHEDULE = {
   "default": { opponents: [], matchupFactor: 1.00 },
 };
 
+// Park factors: wOBA-based, centered on 1.00. >1 = hitter-friendly, <1 = pitcher-friendly.
+// Source: FanGraphs multi-year park factors (2022-2025 blend), normalized to 1.00 average.
+// Applied to predicted run environment when a player's next game is at that venue.
+var PARK_FACTORS = {
+  'COL': 1.18, // Coors Field — extreme hitter park
+  'CIN': 1.10, // Great American Ball Park
+  'TEX': 1.08, // Globe Life Field
+  'BOS': 1.07, // Fenway Park
+  'PHI': 1.06, // Citizens Bank Park
+  'MIL': 1.05, // American Family Field
+  'BAL': 1.04, // Camden Yards
+  'HOU': 1.03, // Minute Maid Park
+  'NYY': 1.03, // Yankee Stadium
+  'MIN': 1.02, // Target Field
+  'TOR': 1.02, // Rogers Centre
+  'CHC': 1.01, // Wrigley Field
+  'ATL': 1.01, // Truist Park
+  'LAA': 1.00, // Angel Stadium
+  'DET': 1.00, // Comerica Park
+  'ARI': 1.00, // Chase Field
+  'SEA': 0.99, // T-Mobile Park
+  'STL': 0.99, // Busch Stadium
+  'WSH': 0.98, // Nationals Park
+  'KCR': 0.98, // Kauffman Stadium
+  'CLE': 0.97, // Progressive Field
+  'NYM': 0.97, // Citi Field
+  'PIT': 0.97, // PNC Park
+  'LAD': 0.96, // Dodger Stadium
+  'SFG': 0.96, // Oracle Park
+  'TBR': 0.96, // Tropicana Field
+  'CHW': 0.95, // Guaranteed Rate Field
+  'OAK': 0.95, // Oakland Coliseum / Sacramento
+  'MIA': 0.94, // loanDepot park
+  'SDP': 0.93, // Petco Park — extreme pitcher park
+};
+
 // ── Real schedule fetch ────────────────────────────────────────────────────
 var LEAGUE_AVG_ERA = 4.20;
 var _teamsListCache = null;
@@ -92,6 +128,44 @@ async function _fetchTeamsList() {
   var d = await r.json();
   _teamsListCache = d.teams || [];
   return _teamsListCache;
+}
+
+// Fetch a hitter's home/away split stats from the MLB Stats API.
+// Returns { homeAvg, homeOps, homeWoba, awayAvg, awayOps, awayWoba } or null on failure.
+var _hitterSplitsCache = {};
+async function fetchHitterSplits(mlbPlayerId) {
+  if (!mlbPlayerId) return null;
+  if (_hitterSplitsCache[mlbPlayerId] !== undefined) return _hitterSplitsCache[mlbPlayerId];
+  try {
+    var r = await fetch(
+      'https://statsapi.mlb.com/api/v1/people/' + mlbPlayerId +
+      '/stats?stats=statSplits&group=hitting&season=2026&sitCodes=h,a&gameType=R'
+    );
+    var d = await r.json();
+    var splits = (d.stats && d.stats[0] && d.stats[0].splits) || [];
+    var result = {};
+    splits.forEach(function(s) {
+      var code = s.split && s.split.code; // 'h' = home, 'a' = away
+      var st   = s.stat || {};
+      if (code === 'h') {
+        result.homeAvg  = parseFloat(st.avg)  || null;
+        result.homeOps  = parseFloat(st.ops)  || null;
+        result.homeWoba = parseFloat(st.obp)  || null; // MLB API doesn't serve wOBA in splits; use OBP as proxy
+        result.homeAb   = st.atBats || 0;
+      } else if (code === 'a') {
+        result.awayAvg  = parseFloat(st.avg)  || null;
+        result.awayOps  = parseFloat(st.ops)  || null;
+        result.awayWoba = parseFloat(st.obp)  || null;
+        result.awayAb   = st.atBats || 0;
+      }
+    });
+    var out = (result.homeAvg || result.awayAvg) ? result : null;
+    _hitterSplitsCache[mlbPlayerId] = out;
+    return out;
+  } catch(e) {
+    _hitterSplitsCache[mlbPlayerId] = null;
+    return null;
+  }
 }
 
 async function _fetchEraLeaderboard() {
@@ -199,7 +273,9 @@ async function fetchUpcomingSchedule(teamName) {
           var opp = isHome ? g.teams.away.team : g.teams.home.team;
           var oppSide = isHome ? g.teams.away : g.teams.home;
           var probablePitcherId = oppSide.probablePitcher && oppSide.probablePitcher.id || null;
-          dateMap[d.date] = { abbr: abbrById[opp.id] || opp.name, id: opp.id, pitcherId: probablePitcherId };
+          // venueAbbr = home team's abbreviation (determines park factor regardless of who's playing)
+          var venueAbbr = abbrById[g.teams.home.team.id] || null;
+          dateMap[d.date] = { abbr: abbrById[opp.id] || opp.name, id: opp.id, pitcherId: probablePitcherId, isHome: isHome, venueAbbr: venueAbbr };
         });
       });
     }
@@ -207,6 +283,8 @@ async function fetchUpcomingSchedule(teamName) {
     var opponents = [];
     var gameDayIds = [];
     var gameDayPitcherIds = [];
+    var gameDayIsHome = [];
+    var gameDayVenueAbbr = [];
     var seenTeams = {}, seenPitchers = {};
     var uniqueTeamIds = [], uniquePitcherIds = [];
     for (var i = 0; i < 14; i++) {
@@ -216,6 +294,8 @@ async function fetchUpcomingSchedule(teamName) {
         opponents.push(entry.abbr);
         gameDayIds.push(entry.id);
         gameDayPitcherIds.push(entry.pitcherId);
+        gameDayIsHome.push(entry.isHome);
+        gameDayVenueAbbr.push(entry.venueAbbr);
         if (!seenTeams[entry.id]) { seenTeams[entry.id] = true; uniqueTeamIds.push(entry.id); }
         if (entry.pitcherId && !seenPitchers[entry.pitcherId]) {
           seenPitchers[entry.pitcherId] = true; uniquePitcherIds.push(entry.pitcherId);
@@ -224,6 +304,8 @@ async function fetchUpcomingSchedule(teamName) {
         opponents.push('---');
         gameDayIds.push(null);
         gameDayPitcherIds.push(null);
+        gameDayIsHome.push(null);
+        gameDayVenueAbbr.push(null);
       }
     }
 
@@ -282,12 +364,16 @@ async function fetchUpcomingSchedule(teamName) {
       matchupDetails = gameDayIds.map(function(teamId, i) {
         if (!teamId) return null;
         var pd = gameDayPitcherIds[i] ? pitcherById[gameDayPitcherIds[i]] : null;
+        var venueAbbr = gameDayVenueAbbr[i];
         return {
           team:         opponents[i],
           teamFullName: nameById[teamId] || null,
           teamId:       teamId,
           teamEra:      teamIdToEra[teamId],
           teamWinPct:   standings[teamId] != null ? standings[teamId].winPct : null,
+          isHome:       gameDayIsHome[i],
+          venueAbbr:    venueAbbr,
+          parkFactor:   venueAbbr ? (PARK_FACTORS[venueAbbr] || 1.00) : 1.00,
           pitcher: pd ? {
             name:         pd.name,
             hand:         pd.hand,
@@ -308,7 +394,16 @@ async function fetchUpcomingSchedule(teamName) {
 
     var myWinPct  = standings[team.id] != null ? standings[team.id].winPct : 0.500;
     var myTeamEra = teamIdToEra[team.id] || LEAGUE_AVG_ERA;
-    var result = { opponents: opponents, opponentFactors: opponentFactors, matchupDetails: matchupDetails, matchupFactor: +matchupFactor.toFixed(3), myWinPct: myWinPct, myTeamEra: myTeamEra };
+    var result = {
+      opponents: opponents,
+      opponentFactors: opponentFactors,
+      matchupDetails: matchupDetails,
+      matchupFactor: +matchupFactor.toFixed(3),
+      gameDayIsHome: gameDayIsHome,
+      gameDayVenueAbbr: gameDayVenueAbbr,
+      myWinPct: myWinPct,
+      myTeamEra: myTeamEra,
+    };
     _scheduleCache[teamName] = result;
     return result;
   } catch (e) {
@@ -513,9 +608,11 @@ function backtestForecast(gameData) {
 }
 
 // ── Prediction scoring (hitters, 0–99) ────────────────────────────────────
+// gameData rows must include a `rawDate` string (YYYY-MM-DD) for fatigue calculation.
+// hitterSplits: { vsLHP, vsRHP, homeAvg, homeOps, awayAvg, awayOps, homeAb, awayAb }
 function computePredictionScore(playerName, teamName, gameData, seasonStats, scheduleData, hitterSplits) {
   if (!gameData || gameData.length < 3) {
-    return { score:50, label:"Insufficient data", tier:"neutral", breakdown:{phaseScore:0,trendScore:0,opsScore:0,momentumScore:0,matchupScore:0}, opponents:[] };
+    return { score:50, label:"Insufficient data", tier:"neutral", breakdown:{phaseScore:0,trendScore:0,opsScore:0,momentumScore:0,matchupScore:0,fatigueScore:0,homeAwayScore:0,parkScore:0}, opponents:[] };
   }
 
   var phaseScore = 15, phaseLabel = "current cycle";
@@ -567,6 +664,7 @@ function computePredictionScore(playerName, teamName, gameData, seasonStats, sch
   var secondHalf = last10.slice(5).reduce(function(s,g){return s+sig(g);},0) / Math.max(last10.slice(5).length,1);
   var momentumScore = secondHalf > firstHalf ? Math.min(15, Math.round((secondHalf - firstHalf) * 200)) : 0;
 
+  // ── Matchup quality (0–10): opponent ERA + win% + pitcher handedness vs batter ──
   var sched        = scheduleData || UPCOMING_SCHEDULE["default"];
   var matchupFactor = sched.matchupFactor || 1.0;
   if (hitterSplits && sched.matchupDetails) {
@@ -584,7 +682,74 @@ function computePredictionScore(playerName, teamName, gameData, seasonStats, sch
   }
   var matchupScore = Math.max(0, Math.min(10, Math.round((matchupFactor - 0.85) / 0.45 * 10)));
 
-  var score = Math.min(99, Math.max(1, phaseScore + trendScore + opsScore + momentumScore + matchupScore));
+  // ── Fatigue (−5 to 0): consecutive days played + PA load in last 5 days ───
+  // Derived from rawDate fields in gameData. No rawDate → no penalty.
+  var fatigueScore = 0;
+  var rawDates = gameData.map(function(g) { return g.rawDate || null; }).filter(Boolean);
+  if (rawDates.length >= 3) {
+    var today = new Date();
+    today.setHours(0, 0, 0, 0);
+    var msPerDay = 86400000;
+    // Count games in the last 5 calendar days
+    var last5Days = rawDates.filter(function(d) {
+      var ms = today - new Date(d + 'T12:00:00');
+      return ms >= 0 && ms < 5 * msPerDay;
+    }).length;
+    // Count consecutive days ending yesterday (no day off recently)
+    var consec = 0;
+    for (var ci = 1; ci <= 7; ci++) {
+      var check = new Date(today - ci * msPerDay).toISOString().slice(0, 10);
+      if (rawDates.indexOf(check) >= 0) consec++; else break;
+    }
+    // PA load: sum plate appearances from last 5 gamelog rows
+    var last5Rows = gameData.slice(-5);
+    var recentPa = last5Rows.reduce(function(s, g) { return s + (g.plate_appearances || g.ab || 0); }, 0);
+
+    var penalty = 0;
+    if (last5Days >= 5 && consec >= 4) penalty += 3; // 5 games in 5 days, no day off
+    else if (last5Days >= 4) penalty += 2;
+    if (recentPa >= 22) penalty += 2;               // >4.4 PA/game average = heavy usage
+    else if (recentPa >= 18) penalty += 1;
+    fatigueScore = -Math.min(5, penalty);
+  }
+
+  // ── Home/away split (−4 to +4): player's actual home vs away performance ──
+  // Uses next scheduled game's isHome flag. Falls back to 0 if no data.
+  var homeAwayScore = 0;
+  if (hitterSplits && sched.matchupDetails && sched.matchupDetails.length) {
+    // Find first scheduled game
+    var nextGame = sched.matchupDetails.find(function(d) { return d != null; });
+    if (nextGame && nextGame.isHome != null) {
+      var splitOps = nextGame.isHome
+        ? (hitterSplits.homeOps || null)
+        : (hitterSplits.awayOps || null);
+      var splitAb  = nextGame.isHome
+        ? (hitterSplits.homeAb || 0)
+        : (hitterSplits.awayAb || 0);
+      // Only apply when we have at least 30 AB in that split (enough to be meaningful)
+      if (splitOps && splitAb >= 30) {
+        // Deviation from league avg OPS (0.730): scale to ±4 pts
+        var opsDelta = splitOps - 0.730;
+        homeAwayScore = Math.max(-4, Math.min(4, Math.round(opsDelta / 0.200 * 4)));
+      }
+    }
+  }
+
+  // ── Park factor (−4 to +4): venue run environment for next scheduled game ──
+  var parkScore = 0;
+  if (sched.matchupDetails && sched.matchupDetails.length) {
+    var nextGamePark = sched.matchupDetails.find(function(d) { return d != null; });
+    if (nextGamePark && nextGamePark.parkFactor != null) {
+      // parkFactor 1.0 = neutral, 1.18 = Coors, 0.93 = Petco
+      // Scale: deviation from 1.0, ±18% → ±4 pts
+      var pfDelta = nextGamePark.parkFactor - 1.0;
+      parkScore = Math.max(-4, Math.min(4, Math.round(pfDelta / 0.18 * 4)));
+    }
+  }
+
+  var score = Math.min(99, Math.max(1,
+    phaseScore + trendScore + opsScore + momentumScore + matchupScore + fatigueScore + homeAwayScore + parkScore
+  ));
   var tier  = score >= 75 ? "hot" : score >= 55 ? "warm" : score >= 35 ? "neutral" : "cold";
   var label = score >= 75 ? 'Peak — ' + phaseLabel + ', strong outlook'
             : score >= 55 ? 'Rising — ' + phaseLabel
@@ -598,7 +763,11 @@ function computePredictionScore(playerName, teamName, gameData, seasonStats, sch
     opponents: sched.opponents,
     opponentFactors: sched.opponentFactors || [],
     matchupDetails: sched.matchupDetails || [],
-    breakdown: { phaseScore: phaseScore, trendScore: trendScore, opsScore: opsScore, momentumScore: momentumScore, matchupScore: matchupScore },
+    breakdown: {
+      phaseScore: phaseScore, trendScore: trendScore, opsScore: opsScore,
+      momentumScore: momentumScore, matchupScore: matchupScore,
+      fatigueScore: fatigueScore, homeAwayScore: homeAwayScore, parkScore: parkScore,
+    },
   };
 }
 
@@ -644,6 +813,7 @@ function transformRows(rows) {
     var ops  = (obp && slg) ? +(obp + slg).toFixed(3) : +(parseFloat(row.ops) || avg * 1.7).toFixed(3);
     var woba = row.woba != null ? +parseFloat(row.woba).toFixed(4) : null;
     return {
+      rawDate:  row.game_date || null,
       date:     new Date(row.game_date + "T12:00:00").toLocaleDateString("en-US", { month:"short", day:"numeric" }),
       cycleDay: cyc, phase: ph.name, phaseColor: ph.color,
       avg:    +avg.toFixed(3),
@@ -1544,7 +1714,7 @@ if (typeof module !== 'undefined' && module.exports) {
     getPhase,
     dft, reconstructAt, analyzePlayerCycles, buildCycleChartData,
     fftPitcher, buildPitcherForecast,
-    fetchUpcomingSchedule, computePredictionScore,
+    fetchUpcomingSchedule, computePredictionScore, fetchHitterSplits,
     backtestForecast, applyPhaseColoring, scoreColor, phaseAvg,
     transformRows, transformMLBSplits,
     scorePlayerAtSpot, buildOptimalLineup, buildOpponentLineup,
