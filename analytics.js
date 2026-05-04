@@ -713,48 +713,17 @@ function computePredictionScore(playerName, teamName, gameData, seasonStats, sch
     fatigueScore = -Math.min(5, penalty);
   }
 
-  // ── Home/away split (−4 to +4): player's actual home vs away performance ──
-  // Uses next scheduled game's isHome flag. Falls back to 0 if no data.
-  var homeAwayScore = 0;
-  if (hitterSplits && sched.matchupDetails && sched.matchupDetails.length) {
-    // Find first scheduled game
-    var nextGame = sched.matchupDetails.find(function(d) { return d != null; });
-    if (nextGame && nextGame.isHome != null) {
-      var splitOps = nextGame.isHome
-        ? (hitterSplits.homeOps || null)
-        : (hitterSplits.awayOps || null);
-      var splitAb  = nextGame.isHome
-        ? (hitterSplits.homeAb || 0)
-        : (hitterSplits.awayAb || 0);
-      // Only apply when we have at least 30 AB in that split (enough to be meaningful)
-      if (splitOps && splitAb >= 30) {
-        // Deviation from league avg OPS (0.730): scale to ±4 pts
-        var opsDelta = splitOps - 0.730;
-        homeAwayScore = Math.max(-4, Math.min(4, Math.round(opsDelta / 0.200 * 4)));
-      }
-    }
-  }
-
-  // ── Park factor (−4 to +4): venue run environment for next scheduled game ──
-  var parkScore = 0;
-  if (sched.matchupDetails && sched.matchupDetails.length) {
-    var nextGamePark = sched.matchupDetails.find(function(d) { return d != null; });
-    if (nextGamePark && nextGamePark.parkFactor != null) {
-      // parkFactor 1.0 = neutral, 1.18 = Coors, 0.93 = Petco
-      // Scale: deviation from 1.0, ±18% → ±4 pts
-      var pfDelta = nextGamePark.parkFactor - 1.0;
-      parkScore = Math.max(-4, Math.min(4, Math.round(pfDelta / 0.18 * 4)));
-    }
-  }
-
   var score = Math.min(99, Math.max(1,
-    phaseScore + trendScore + opsScore + momentumScore + matchupScore + fatigueScore + homeAwayScore + parkScore
+    phaseScore + trendScore + opsScore + momentumScore + matchupScore + fatigueScore
   ));
   var tier  = score >= 75 ? "hot" : score >= 55 ? "warm" : score >= 35 ? "neutral" : "cold";
   var label = score >= 75 ? 'Peak — ' + phaseLabel + ', strong outlook'
             : score >= 55 ? 'Rising — ' + phaseLabel
             : score >= 35 ? 'Holding — ' + phaseLabel
             : 'Fading — ' + phaseLabel;
+
+  // Expose next-game context for display (park + home/away) without affecting the score
+  var nextGame = sched.matchupDetails && sched.matchupDetails.find(function(d) { return d != null; });
 
   return {
     score: score, tier: tier, label: label, phaseLabel: phaseLabel,
@@ -763,10 +732,11 @@ function computePredictionScore(playerName, teamName, gameData, seasonStats, sch
     opponents: sched.opponents,
     opponentFactors: sched.opponentFactors || [],
     matchupDetails: sched.matchupDetails || [],
+    nextGame: nextGame || null,
     breakdown: {
       phaseScore: phaseScore, trendScore: trendScore, opsScore: opsScore,
       momentumScore: momentumScore, matchupScore: matchupScore,
-      fatigueScore: fatigueScore, homeAwayScore: homeAwayScore, parkScore: parkScore,
+      fatigueScore: fatigueScore,
     },
   };
 }
@@ -1081,41 +1051,36 @@ function _predictGame(lineupWobas, lineupScores, oppEra, oppWinPct, oppLineupWob
   var teamQuality = myWinPct != null ? Math.max(0.88, Math.min(1.12, 1.0 + (myWinPct - 0.500) * 0.5)) : 1.0;
 
   // ── Home/away split factor ──────────────────────────────────────────────────
-  // Uses actual home (or away) win % vs season overall, capped at ±6% nudge on runs.
-  // Only applied when we have enough split data (at least implicitly via non-null).
   var homeAwayFactor = 1.0;
   if (ctx) {
     var splitPct = ctx.isHome ? ctx.homeWinPct : ctx.awayWinPct;
     if (splitPct != null && myWinPct > 0) {
-      // How much better/worse than their overall rate in this venue
       var splitDelta = splitPct - myWinPct;
       homeAwayFactor = Math.max(0.94, Math.min(1.06, 1.0 + splitDelta * 0.5));
     }
   }
 
   // ── vs-inferior-opponent factor ─────────────────────────────────────────────
-  // When facing a losing team, do they step up? Uses "vs winners" record as a proxy:
-  // a team that beats winning teams tends to also beat losing teams consistently.
-  // Applied only when opp is below .500 (inferior opponent scenario).
   var inferiorOppFactor = 1.0;
   if (ctx && ctx.vsWinnersWinPct != null && !ctx.oppIsAbove500) {
-    // vsWinnersWinPct < overall win pct → they struggle vs good teams, so
-    // implicitly perform better vs bad ones. Scale: ±4% nudge on runs.
-    var vsGoodDelta = myWinPct - ctx.vsWinnersWinPct; // positive = underperforms vs good
+    var vsGoodDelta = myWinPct - ctx.vsWinnersWinPct;
     inferiorOppFactor = Math.max(0.96, Math.min(1.04, 1.0 + vsGoodDelta * 0.3));
   }
 
+  // ── Park factor ─────────────────────────────────────────────────────────────
+  // Applied to both teams' run estimates — the park affects both offenses equally.
+  var parkFactor = (ctx && ctx.parkFactor != null) ? ctx.parkFactor : 1.0;
+
   var predictedRuns = Math.min(
-    avgWoba * w.wobaRunScale * scoreFactor * adjustedEraFactor * teamQuality * homeAwayFactor * inferiorOppFactor,
+    avgWoba * w.wobaRunScale * scoreFactor * adjustedEraFactor * teamQuality * homeAwayFactor * inferiorOppFactor * parkFactor,
     w.maxPredictedRuns
   );
 
-  // Opponent run estimate: blend wOBA-based (accounts for lineup quality/defense)
-  // with win%-based (captures overall team strength). 60/40 when wOBA available.
+  // Opponent run estimate — also scaled by park factor
   var oppRunsWinPct = 4.65 + (oppWinPct - 0.500) * 13.0;
   var oppRunsEst = (oppLineupWoba != null && oppLineupWoba > 0)
-    ? oppLineupWoba * w.wobaRunScale * 0.6 + oppRunsWinPct * 0.4
-    : oppRunsWinPct;
+    ? (oppLineupWoba * w.wobaRunScale * 0.6 + oppRunsWinPct * 0.4) * parkFactor
+    : oppRunsWinPct * parkFactor;
 
   // Softened sigmoid (0.40) — less confident on close run differentials
   var runDiff = predictedRuns - oppRunsEst;
@@ -1131,6 +1096,7 @@ function _predictGame(lineupWobas, lineupScores, oppEra, oppWinPct, oppLineupWob
     eraFactor:         +eraFactor.toFixed(3),
     homeAwayFactor:    +homeAwayFactor.toFixed(3),
     inferiorOppFactor: +inferiorOppFactor.toFixed(3),
+    parkFactor:        +parkFactor.toFixed(3),
   };
 }
 
@@ -1140,6 +1106,10 @@ async function backtestGamePlan(teamName, roster, predCache, sbUrl, sbKey, days)
   var teams = await _fetchTeamsList();
   var team  = teams.find(function(t) { return t.name === teamName; });
   if (!team) return { error: 'Team not found: ' + teamName, games: [] };
+
+  var abbrById = {};
+  teams.forEach(function(t) { abbrById[t.id] = t.abbreviation; });
+  var myAbbr = abbrById[team.id] || null;
 
   // 1. Fetch past games
   var pastGames = await _fetchPastGames(teamName, days);
@@ -1194,12 +1164,17 @@ async function backtestGamePlan(teamName, roster, predCache, sbUrl, sbKey, days)
     var myWinPct   = myEntry  != null ? myEntry.winPct  : 0.500;
 
     // Split records for the new predictors
+    // Venue is our park when home, opp park when away
+    var venueAbbr    = g.isHome ? myAbbr : (abbrById[g.opponentId] || null);
+    var gameParkFactor = venueAbbr ? (PARK_FACTORS[venueAbbr] || 1.0) : 1.0;
+
     var myCtx = {
       isHome:          g.isHome,
       homeWinPct:      myEntry  ? myEntry.homeWinPct      : null,
       awayWinPct:      myEntry  ? myEntry.awayWinPct      : null,
       vsWinnersWinPct: myEntry  ? myEntry.vsWinnersWinPct : null,
       oppIsAbove500:   oppWinPct >= 0.500,
+      parkFactor:      gameParkFactor,
     };
     var oppCtx = {
       isHome:          !g.isHome,
@@ -1207,6 +1182,7 @@ async function backtestGamePlan(teamName, roster, predCache, sbUrl, sbKey, days)
       awayWinPct:      oppEntry ? oppEntry.awayWinPct      : null,
       vsWinnersWinPct: oppEntry ? oppEntry.vsWinnersWinPct : null,
       oppIsAbove500:   myWinPct >= 0.500,
+      parkFactor:      gameParkFactor,
     };
 
     // Fetch both box scores simultaneously: our team + opponent
@@ -1489,12 +1465,14 @@ async function fetchTodayGames(roster, predCache) {
     var awayEntry  = standings[awayId];
     var homeWinPct = homeEntry != null ? homeEntry.winPct : 0.500;
     var awayWinPct = awayEntry != null ? awayEntry.winPct : 0.500;
+    var gameParkFactor = PARK_FACTORS[homeAbbr] || 1.0;
     var homeCtx = {
       isHome:          true,
       homeWinPct:      homeEntry ? homeEntry.homeWinPct      : null,
       awayWinPct:      homeEntry ? homeEntry.awayWinPct      : null,
       vsWinnersWinPct: homeEntry ? homeEntry.vsWinnersWinPct : null,
       oppIsAbove500:   awayWinPct >= 0.500,
+      parkFactor:      gameParkFactor,
     };
     var awayCtx = {
       isHome:          false,
@@ -1502,6 +1480,7 @@ async function fetchTodayGames(roster, predCache) {
       awayWinPct:      awayEntry ? awayEntry.awayWinPct      : null,
       vsWinnersWinPct: awayEntry ? awayEntry.vsWinnersWinPct : null,
       oppIsAbove500:   homeWinPct >= 0.500,
+      parkFactor:      gameParkFactor,
     };
 
     // Try to get actual lineup from boxscore (game started or lineup released)
