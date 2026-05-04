@@ -341,17 +341,24 @@
               No significant cycles detected — using 28-day fixed cycle as fallback.
             </div>
           )}
-          {rows.map(([lbl,val,max,note])=>(
-            <div key={lbl} style={{marginBottom:10}}>
-              <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"#64748b",marginBottom:3}}>
-                <span>{lbl}{note?<span style={{color:"#475569",marginLeft:5}}>· {note}</span>:""}</span>
-                <span style={{fontWeight:600,color:"#94a3b8"}}>{val}/{max}</span>
+          {rows.map(([lbl,val,max,note])=>{
+            const isNegRow = val < 0;
+            const barPct = max > 0 ? (val/max)*100 : 0;
+            const barColor = isNegRow ? '#ef4444' : barPct>80?'#22c55e':barPct>=40?'#f59e0b':'#ef4444';
+            return (
+              <div key={lbl} style={{marginBottom:10}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"#64748b",marginBottom:3}}>
+                  <span>{lbl}{note?<span style={{color:"#475569",marginLeft:5}}>· {note}</span>:""}</span>
+                  <span style={{fontWeight:600,color:isNegRow?'#ef4444':"#94a3b8"}}>{max>0?`${val}/${max}`:val}</span>
+                </div>
+                {max>0&&(
+                  <div style={{height:4,background:"#1e293b",borderRadius:4,overflow:"hidden"}}>
+                    <div style={{width:`${barPct}%`,height:"100%",background:barColor,borderRadius:4}}/>
+                  </div>
+                )}
               </div>
-              <div style={{height:4,background:"#1e293b",borderRadius:4,overflow:"hidden"}}>
-                <div style={{width:`${(val/max)*100}%`,height:"100%",background:(val/max)>0.8?'#22c55e':(val/max)>=0.4?'#f59e0b':'#ef4444',borderRadius:4}}/>
-              </div>
-            </div>
-          ))}
+            );
+          })}
           {nextGame&&(
             <div style={{borderTop:'1px solid #1e293b',paddingTop:8,marginTop:4,display:'flex',gap:8,flexWrap:'wrap'}}>
               {nextGame.venueAbbr&&(()=>{
