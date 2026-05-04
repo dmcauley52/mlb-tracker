@@ -2641,14 +2641,20 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
             splitsForPred = battingSplits;
             setHitterSplits({overall:ssRaw.avg||null, ...battingSplits});
           }else if(dataSource==="live"&&sbUrl&&sbKey){
-            const rows = await fetchPlayerGames(sbUrl,sbKey,selectedPlayer.player_name);
+            const pid = selectedPlayer.mlbId||MLB_IDS[selectedPlayer.player_name];
+            const [rows, homeSplits] = await Promise.all([
+              fetchPlayerGames(sbUrl,sbKey,selectedPlayer.player_name),
+              pid ? fetchHitterSplits(pid).catch(()=>null) : Promise.resolve(null),
+            ]);
             games = rows.length?transformRows(rows):genDemo(selectedPlayer.player_name,1.5);
             if(!rows.length) setDataError("No rows found — showing demo.");
-            mlbSearchPlayer(selectedPlayer.player_name).then(person=>{
-              if(person) mlbFetchBattingSplits(person.id).then(battingSplits=>{
-                setHitterSplits({overall:null, ...battingSplits});
-              }).catch(()=>{});
+            if(homeSplits) setHitterSplits({overall:null, ...homeSplits});
+            // Also fetch L/R splits asynchronously for the splits UI panel
+            if(pid) mlbFetchBattingSplits(pid).then(battingSplits=>{
+              setHitterSplits(prev=>({...(prev||{}), ...battingSplits}));
+              splitsForPred = {...(homeSplits||{}), ...battingSplits};
             }).catch(()=>{});
+            splitsForPred = homeSplits;
           }else{
             const idx = DEMO_PLAYERS.findIndex(p=>p.player_name===selectedPlayer.player_name);
             await new Promise(r=>setTimeout(r,300));
