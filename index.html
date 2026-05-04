@@ -326,10 +326,16 @@
         ["Matchup quality",    bd.matchupScore,  10, matchupNote],
       ];
       const bonusRows = [
-        ["Park factor",   bd.parkScore,     4, parkNote],
-        ["Home/away",     bd.homeAwayScore, 4, homeAwayNote],
-        ["Fatigue",       bd.fatigueScore,  0, bd.fatigueScore<0?`${bd.fatigueScore} pts penalty`:null],
-      ].filter(([,val])=> val !== undefined && val !== 0);
+        // Show park/home-away whenever we have schedule data (even 0 = neutral is informative)
+        ...(nextGame ? [
+          ["Park factor",  bd.parkScore     ?? 0, 4, parkNote],
+          ["Home/away",    bd.homeAwayScore ?? 0, 4, homeAwayNote],
+        ] : []),
+        // Only show fatigue when there's an actual penalty
+        ...(bd.fatigueScore < 0 ? [
+          ["Fatigue", bd.fatigueScore, 0, `${bd.fatigueScore} pts`],
+        ] : []),
+      ];
       return(
         <div style={{background:"#0f172a",borderRadius:10,padding:16}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
