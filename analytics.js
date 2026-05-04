@@ -60,16 +60,23 @@ async function _fetchStandings() {
     var map = {};
     (d.records || []).forEach(function(rec) {
       (rec.teamRecords || []).forEach(function(tr) {
-        var last10 = (tr.records && tr.records.splitRecords || []).find(function(s) { return s.type === 'lastTen'; });
-        var last10Pct = last10 && (last10.wins + last10.losses) > 0
-          ? last10.wins / (last10.wins + last10.losses)
-          : null;
+        var splits = (tr.records && tr.records.splitRecords) || [];
+        var findSplit = function(type) {
+          var s = splits.find(function(x) { return x.type === type; });
+          return s && (s.wins + s.losses) > 0 ? s.wins / (s.wins + s.losses) : null;
+        };
+        var last10Pct = findSplit('lastTen');
         var seasonPct = tr.wins + tr.losses > 0
           ? tr.wins / (tr.wins + tr.losses)
           : 0.500;
         // Blend 50/50: last-10 is noisy (10 games), season is more stable
         var winPct = last10Pct != null ? (last10Pct * 0.5 + seasonPct * 0.5) : seasonPct;
-        map[tr.team.id] = +winPct.toFixed(3);
+        map[tr.team.id] = {
+          winPct:         +winPct.toFixed(3),
+          homeWinPct:     findSplit('home'),
+          awayWinPct:     findSplit('away'),
+          vsWinnersWinPct: findSplit('winners'),
+        };
       });
     });
     _standingsCache = map;
@@ -267,7 +274,7 @@ async function fetchUpcomingSchedule(teamName) {
         var pd = gameDayPitcherIds[i] ? pitcherById[gameDayPitcherIds[i]] : null;
         var era = (pd && pd.era != null) ? pd.era : teamIdToEra[teamId];
         var eraFactor = Math.max(0.85, Math.min(1.25, era / LEAGUE_AVG_ERA));
-        var winPct = standings[teamId] != null ? standings[teamId] : 0.500;
+        var winPct = standings[teamId] != null ? standings[teamId].winPct : 0.500;
         var wlFactor  = Math.max(0.85, Math.min(1.15, 1 + (0.500 - winPct) * 1.5));
         return Math.max(0.80, Math.min(1.30, +(eraFactor * 0.6 + wlFactor * 0.4).toFixed(3)));
       });
@@ -280,7 +287,7 @@ async function fetchUpcomingSchedule(teamName) {
           teamFullName: nameById[teamId] || null,
           teamId:       teamId,
           teamEra:      teamIdToEra[teamId],
-          teamWinPct:   standings[teamId] != null ? standings[teamId] : null,
+          teamWinPct:   standings[teamId] != null ? standings[teamId].winPct : null,
           pitcher: pd ? {
             name:         pd.name,
             hand:         pd.hand,
@@ -299,7 +306,7 @@ async function fetchUpcomingSchedule(teamName) {
       matchupFactor = gameDayFactors.reduce(function(a, b) { return a + b; }, 0) / gameDayFactors.length;
     }
 
-    var myWinPct  = standings[team.id] != null ? standings[team.id] : 0.500;
+    var myWinPct  = standings[team.id] != null ? standings[team.id].winPct : 0.500;
     var myTeamEra = teamIdToEra[team.id] || LEAGUE_AVG_ERA;
     var result = { opponents: opponents, opponentFactors: opponentFactors, matchupDetails: matchupDetails, matchupFactor: +matchupFactor.toFixed(3), myWinPct: myWinPct, myTeamEra: myTeamEra };
     _scheduleCache[teamName] = result;
@@ -875,7 +882,8 @@ async function _fetchGameBoxScore(gameId, teamId, rosterMap) {
 // Compute predicted runs/win using pre-game lineup wOBA + pred scores + opp ERA factor
 // oppLineupWoba: opponent's season avg wOBA (from box score lookup) — improves opp run estimate
 // myWinPct: our team's blended win% — applies quality discount for weak teams
-function _predictGame(lineupWobas, lineupScores, oppEra, oppWinPct, oppLineupWoba, myWinPct) {
+// ctx (optional): { isHome, homeWinPct, awayWinPct, vsWinnersWinPct, oppIsAbove500 }
+function _predictGame(lineupWobas, lineupScores, oppEra, oppWinPct, oppLineupWoba, myWinPct, ctx) {
   var w = BACKTEST_WEIGHTS;
   var n = lineupWobas.length;
 
@@ -899,11 +907,36 @@ function _predictGame(lineupWobas, lineupScores, oppEra, oppWinPct, oppLineupWob
   var scoreFactor = 1 + (avgScore - 50) / 99 * w.scoreBoost * scoreConfidence;
   // Blend ERA factor with neutral (1.0) using oppEraScale weight
   var adjustedEraFactor = eraFactor * w.oppEraScale + 1.0 * (1 - w.oppEraScale);
-  // Fix 1: team quality discount — bad teams convert wOBA to runs less efficiently
+  // Team quality discount — bad teams convert wOBA to runs less efficiently
   var teamQuality = myWinPct != null ? Math.max(0.88, Math.min(1.12, 1.0 + (myWinPct - 0.500) * 0.5)) : 1.0;
 
+  // ── Home/away split factor ──────────────────────────────────────────────────
+  // Uses actual home (or away) win % vs season overall, capped at ±6% nudge on runs.
+  // Only applied when we have enough split data (at least implicitly via non-null).
+  var homeAwayFactor = 1.0;
+  if (ctx) {
+    var splitPct = ctx.isHome ? ctx.homeWinPct : ctx.awayWinPct;
+    if (splitPct != null && myWinPct > 0) {
+      // How much better/worse than their overall rate in this venue
+      var splitDelta = splitPct - myWinPct;
+      homeAwayFactor = Math.max(0.94, Math.min(1.06, 1.0 + splitDelta * 0.5));
+    }
+  }
+
+  // ── vs-inferior-opponent factor ─────────────────────────────────────────────
+  // When facing a losing team, do they step up? Uses "vs winners" record as a proxy:
+  // a team that beats winning teams tends to also beat losing teams consistently.
+  // Applied only when opp is below .500 (inferior opponent scenario).
+  var inferiorOppFactor = 1.0;
+  if (ctx && ctx.vsWinnersWinPct != null && !ctx.oppIsAbove500) {
+    // vsWinnersWinPct < overall win pct → they struggle vs good teams, so
+    // implicitly perform better vs bad ones. Scale: ±4% nudge on runs.
+    var vsGoodDelta = myWinPct - ctx.vsWinnersWinPct; // positive = underperforms vs good
+    inferiorOppFactor = Math.max(0.96, Math.min(1.04, 1.0 + vsGoodDelta * 0.3));
+  }
+
   var predictedRuns = Math.min(
-    avgWoba * w.wobaRunScale * scoreFactor * adjustedEraFactor * teamQuality,
+    avgWoba * w.wobaRunScale * scoreFactor * adjustedEraFactor * teamQuality * homeAwayFactor * inferiorOppFactor,
     w.maxPredictedRuns
   );
 
@@ -914,18 +947,20 @@ function _predictGame(lineupWobas, lineupScores, oppEra, oppWinPct, oppLineupWob
     ? oppLineupWoba * w.wobaRunScale * 0.6 + oppRunsWinPct * 0.4
     : oppRunsWinPct;
 
-  // Fix 3: softened sigmoid (0.40 vs 0.55) — less confident on close run differentials
+  // Softened sigmoid (0.40) — less confident on close run differentials
   var runDiff = predictedRuns - oppRunsEst;
   var winProb = 1 / (1 + Math.exp(-runDiff * 0.40));
 
   return {
-    predictedRuns:  +predictedRuns.toFixed(2),
-    predictedWoba:  +avgWoba.toFixed(4),
-    predictedWin:   winProb >= 0.50,
-    winProb:        +winProb.toFixed(3),
-    oppRunsEst:     +oppRunsEst.toFixed(2),
-    avgScore:       Math.round(avgScore),
-    eraFactor:      +eraFactor.toFixed(3),
+    predictedRuns:     +predictedRuns.toFixed(2),
+    predictedWoba:     +avgWoba.toFixed(4),
+    predictedWin:      winProb >= 0.50,
+    winProb:           +winProb.toFixed(3),
+    oppRunsEst:        +oppRunsEst.toFixed(2),
+    avgScore:          Math.round(avgScore),
+    eraFactor:         +eraFactor.toFixed(3),
+    homeAwayFactor:    +homeAwayFactor.toFixed(3),
+    inferiorOppFactor: +inferiorOppFactor.toFixed(3),
   };
 }
 
@@ -983,7 +1018,26 @@ async function backtestGamePlan(teamName, roster, predCache, sbUrl, sbKey, days)
     var oppEra = g.spId && pitcherMap[g.spId] && pitcherMap[g.spId].era != null
       ? pitcherMap[g.spId].era
       : (teamEraMap[g.opponentId] || LEAGUE_AVG_ERA);
-    var oppWinPct = standingsMap[g.opponentId] != null ? standingsMap[g.opponentId] : 0.500;
+    var oppEntry   = standingsMap[g.opponentId];
+    var oppWinPct  = oppEntry != null ? oppEntry.winPct : 0.500;
+    var myEntry    = standingsMap[team.id];
+    var myWinPct   = myEntry  != null ? myEntry.winPct  : 0.500;
+
+    // Split records for the new predictors
+    var myCtx = {
+      isHome:          g.isHome,
+      homeWinPct:      myEntry  ? myEntry.homeWinPct      : null,
+      awayWinPct:      myEntry  ? myEntry.awayWinPct      : null,
+      vsWinnersWinPct: myEntry  ? myEntry.vsWinnersWinPct : null,
+      oppIsAbove500:   oppWinPct >= 0.500,
+    };
+    var oppCtx = {
+      isHome:          !g.isHome,
+      homeWinPct:      oppEntry ? oppEntry.homeWinPct      : null,
+      awayWinPct:      oppEntry ? oppEntry.awayWinPct      : null,
+      vsWinnersWinPct: oppEntry ? oppEntry.vsWinnersWinPct : null,
+      oppIsAbove500:   myWinPct >= 0.500,
+    };
 
     // Fetch both box scores simultaneously: our team + opponent
     var [boxScore, oppBoxScore] = await Promise.all([
@@ -993,7 +1047,6 @@ async function backtestGamePlan(teamName, roster, predCache, sbUrl, sbKey, days)
     var actualLineup = boxScore.lineup; // [{spot, name, avgWoba, position}]
 
     var myTeamEra = teamEraMap[team.id] || LEAGUE_AVG_ERA;
-    var myWinPct  = standingsMap[team.id] != null ? standingsMap[team.id] : 0.500;
 
     // Prediction A: actual lineup that played (season avgWoba per player)
     var actualWobas  = actualLineup.map(function(p) { return p.avgWoba; });
@@ -1003,19 +1056,19 @@ async function backtestGamePlan(teamName, roster, predCache, sbUrl, sbKey, days)
     });
     var oppLineupWoba = oppBoxScore.woba || null;
     var predActual = actualWobas.length
-      ? _predictGame(actualWobas, actualScores, oppEra, oppWinPct, oppLineupWoba, myWinPct)
+      ? _predictGame(actualWobas, actualScores, oppEra, oppWinPct, oppLineupWoba, myWinPct, myCtx)
       : null;
 
     // Prediction B: suggested (optimizer) lineup — kept for summary stats
     var sugWobas  = suggestedTop9.map(function(p) { return p.avgWoba || 0.310; });
     var sugScores = suggestedTop9.map(function(p) { return (predCache[p.player_name] && predCache[p.player_name].score) || 50; });
-    var predSuggested = _predictGame(sugWobas, sugScores, oppEra, oppWinPct, oppLineupWoba, myWinPct);
+    var predSuggested = _predictGame(sugWobas, sugScores, oppEra, oppWinPct, oppLineupWoba, myWinPct, myCtx);
 
     // Independent opponent prediction — call _predictGame for opp side so win probs can be normalised
     var oppBatWobas = oppBoxScore.lineup && oppBoxScore.lineup.length
       ? oppBoxScore.lineup.map(function(p) { return p.avgWoba || 0.310; })
       : (oppLineupWoba ? Array(9).fill(oppLineupWoba) : Array(9).fill(0.310));
-    var predOppSide = _predictGame(oppBatWobas, Array(oppBatWobas.length).fill(50), myTeamEra, myWinPct, oppLineupWoba, oppWinPct);
+    var predOppSide = _predictGame(oppBatWobas, Array(oppBatWobas.length).fill(50), myTeamEra, myWinPct, oppLineupWoba, oppWinPct, oppCtx);
 
     // Normalise so our win prob + opp win prob = 1 (same scale as Today's Games)
     function normProbs(myRaw, oppRaw) {
@@ -1262,8 +1315,24 @@ async function fetchTodayGames(roster, predCache) {
     // ERA used for prediction: SP era if available, else team era
     var homeSpEra = (homeSp && homeSp.era != null) ? homeSp.era : teamEraMap[homeId] || LEAGUE_AVG_ERA;
     var awaySpEra = (awaySp && awaySp.era != null) ? awaySp.era : teamEraMap[awayId] || LEAGUE_AVG_ERA;
-    var homeWinPct = standings[homeId] != null ? standings[homeId] : 0.500;
-    var awayWinPct = standings[awayId] != null ? standings[awayId] : 0.500;
+    var homeEntry  = standings[homeId];
+    var awayEntry  = standings[awayId];
+    var homeWinPct = homeEntry != null ? homeEntry.winPct : 0.500;
+    var awayWinPct = awayEntry != null ? awayEntry.winPct : 0.500;
+    var homeCtx = {
+      isHome:          true,
+      homeWinPct:      homeEntry ? homeEntry.homeWinPct      : null,
+      awayWinPct:      homeEntry ? homeEntry.awayWinPct      : null,
+      vsWinnersWinPct: homeEntry ? homeEntry.vsWinnersWinPct : null,
+      oppIsAbove500:   awayWinPct >= 0.500,
+    };
+    var awayCtx = {
+      isHome:          false,
+      homeWinPct:      awayEntry ? awayEntry.homeWinPct      : null,
+      awayWinPct:      awayEntry ? awayEntry.awayWinPct      : null,
+      vsWinnersWinPct: awayEntry ? awayEntry.vsWinnersWinPct : null,
+      oppIsAbove500:   homeWinPct >= 0.500,
+    };
 
     // Try to get actual lineup from boxscore (game started or lineup released)
     var homeLineup = null, awayLineup = null;
@@ -1351,9 +1420,9 @@ async function fetchTodayGames(roster, predCache) {
     }
 
     // Home team prediction: faces away SP, away wOBA is opponent lineup
-    var homePred = _predictGame(homeArr.wobas, homeArr.scores, awaySpEra, awayWinPct, awaySeasonWoba, homeWinPct);
+    var homePred = _predictGame(homeArr.wobas, homeArr.scores, awaySpEra, awayWinPct, awaySeasonWoba, homeWinPct, homeCtx);
     // Away team prediction: faces home SP, home wOBA is opponent lineup
-    var awayPred = _predictGame(awayArr.wobas, awayArr.scores, homeSpEra, homeWinPct, homeSeasonWoba, awayWinPct);
+    var awayPred = _predictGame(awayArr.wobas, awayArr.scores, homeSpEra, homeWinPct, homeSeasonWoba, awayWinPct, awayCtx);
 
     // Normalise to sum to 1 (sigmoid outputs are independent; blend for display)
     var rawHome = homePred.winProb;
