@@ -2607,6 +2607,7 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
       const [rosterLoading,setRosterLoading] = useState(false);
       const [rosterError,setRosterError]     = useState("");
       const [sortBy,setSortBy]         = useState("name");
+      const [rankedSort,setRankedSort] = useState("score");
       const [teamFilter,setTeamFilter] = useState(()=>{ const t=readMeta("default-team"); return t||"ALL"; });
       const [search,setSearch]         = useState("");
       const [selectedPlayer,setSelectedPlayer] = useState(null);
