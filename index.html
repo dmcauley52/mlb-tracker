@@ -3048,7 +3048,13 @@ Based specifically on the detected cycle periods and forecast direction above �
                     (sortBy==="positions"?posGroupOrder:sortBy==="consistency"?["Reliable","Average","Streaky","Unscored"].filter(k=>grouped[k]):Object.keys(grouped).sort()).map(groupKey=>(
                       <div key={groupKey}>
                         {sortBy==="prediction"&&(
-                          <div style={{fontSize:10,fontWeight:800,color:"#f59e0b",textTransform:"uppercase",letterSpacing:1,padding:"4px 6px",marginBottom:4}}>🔮 3–5 Day Rankings</div>
+                          <div style={{padding:"4px 6px",marginBottom:4}}>
+                            <div style={{fontSize:10,fontWeight:800,color:"#f59e0b",textTransform:"uppercase",letterSpacing:1,marginBottom:6}}>🔮 3–5 Day Rankings</div>
+                            <div style={{display:"flex",gap:4}}>
+                              <button onClick={e=>{e.stopPropagation();setRankedSort("score");}} style={{...s.btn(rankedSort==="score","#f59e0b"),flex:1,padding:"3px 6px",fontSize:10}}>Score</button>
+                              <button onClick={e=>{e.stopPropagation();setRankedSort("r2");}} style={{...s.btn(rankedSort==="r2","#a855f7"),flex:1,padding:"3px 6px",fontSize:10}}>R² Fit</button>
+                            </div>
+                          </div>
                         )}
                         {sortBy==="name"&&dataSource!=="mlb"&&(
                           <div style={{fontSize:10,fontWeight:800,color:"#475569",textTransform:"uppercase",letterSpacing:1,padding:"4px 6px",marginBottom:2}}>{groupKey}</div>
