@@ -3255,7 +3255,7 @@ Based specifically on the detected cycle periods and forecast direction above �
                               })}
                             </div>
                             <div style={{marginTop:10,padding:"8px 10px",background:"#0f172a",borderRadius:6,fontSize:10,color:"#475569",lineHeight:1.5}}>
-                              DFT on {gameData.length}-game batting avg signal. Top {cycleAnalysis.dominantCycles.length} frequency component{cycleAnalysis.dominantCycles.length!==1?"s":""} kept (amplitude ≥ 0.005, period ≥ 4 games). Forecast extrapolates these cycles {FORECAST_DAYS} games forward.
+                              DFT on {gameData.length}-game {sigLabel} signal. Top {cycleAnalysis.dominantCycles.length} frequency component{cycleAnalysis.dominantCycles.length!==1?"s":""} kept (amplitude ≥ 0.005, period ≥ 4 games). Forecast extrapolates these cycles {FORECAST_DAYS} games forward.
                             </div>
                           </>
                         )}
