@@ -733,6 +733,7 @@ function computePredictionScore(playerName, teamName, gameData, seasonStats, sch
     score: score, tier: tier, label: label, phaseLabel: phaseLabel,
     usingFixedCycle: usingFixedCycle, insufficientData: insufficientData,
     consistency: consistency, stdDev: +stdDev.toFixed(3),
+    r2: analysis ? +analysis.r2.toFixed(2) : null,
     opponents: sched.opponents,
     opponentFactors: sched.opponentFactors || [],
     matchupDetails: sched.matchupDetails || [],
