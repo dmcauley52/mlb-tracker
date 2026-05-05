@@ -2806,7 +2806,11 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
       const filteredRoster = roster
         .filter(p=>(teamFilter==="ALL"||(p.team||"").trim()===teamFilter.trim())&&p.player_name.toLowerCase().includes(search.toLowerCase()))
         .sort((a,b)=>{
-          if(sortBy==="prediction"||sortBy==="positions")
+          if(sortBy==="prediction"){
+            if(rankedSort==="r2") return (predCache[b.player_name]?.r2??-1)-(predCache[a.player_name]?.r2??-1);
+            return (predCache[b.player_name]?.score||0)-(predCache[a.player_name]?.score||0);
+          }
+          if(sortBy==="positions")
             return (predCache[b.player_name]?.score||0)-(predCache[a.player_name]?.score||0);
           if(sortBy==="consistency")
             return (predCache[b.player_name]?.consistency??-1)-(predCache[a.player_name]?.consistency??-1);
