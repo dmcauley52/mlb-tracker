@@ -3093,10 +3093,11 @@ Based specifically on the detected cycle periods and forecast direction above �
                                   {(sortBy==="prediction"||sortBy==="positions")&&teamNick&&<span style={{color:isSel?"rgba(255,255,255,0.55)":"#475569",fontWeight:400,marginLeft:5,fontSize:10}}>{teamNick}</span>}
                                   {p.position&&<span style={{color:isSel?"rgba(255,255,255,0.55)":"#475569",fontWeight:400,marginLeft:4,fontSize:10}}>{p.position}</span>}
                                 </span>
-                                {pred&&<span style={{display:"flex",alignItems:"center",gap:3}}>
+                                {pred&&<span style={{display:"flex",alignItems:"center",gap:4}}>
                                   <span style={{fontSize:11,fontWeight:700,color:isSel?"#fff":TIER_COLOR[pred.tier]}}>{pred.score}</span>
                                   {!isSel&&pred.consistency>=70&&<span style={{fontSize:9,color:"#60a5fa",fontWeight:700,letterSpacing:0.3}}>flat</span>}
                                   {!isSel&&pred.consistency<=30&&<span style={{fontSize:9,color:"#f59e0b",fontWeight:700,letterSpacing:0.3}}>≋</span>}
+                                  {!isSel&&sortBy==="prediction"&&pred.r2!=null&&<span style={{fontSize:9,color:"#a855f7",fontWeight:600}}>R²{pred.r2.toFixed(2)}</span>}
                                 </span>}
                               </div>
                               {pred&&!isSel&&<ScoreBar score={pred.score} tier={pred.tier}/>}
