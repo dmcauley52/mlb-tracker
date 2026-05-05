@@ -442,10 +442,46 @@ function reconstructAt(components, N, positions) {
   });
 }
 
+// Fill calendar gaps between games with the running mean of signal up to that point.
+// Only operates on rows that have rawDate; skips silently if dates are missing.
+function fillRestDays(gameData) {
+  var hasDates = gameData.length > 0 && gameData[0].rawDate;
+  if (!hasDates) return gameData;
+  var filled = [];
+  for (var i = 0; i < gameData.length; i++) {
+    filled.push(gameData[i]);
+    if (i === gameData.length - 1) break;
+    var d1 = new Date(gameData[i].rawDate + 'T12:00:00');
+    var d2 = new Date(gameData[i + 1].rawDate + 'T12:00:00');
+    var gap = Math.round((d2 - d1) / 86400000) - 1; // calendar days between games
+    if (gap <= 0) continue;
+    // Running mean of signal through current game
+    var runSum = 0, runCount = 0;
+    for (var j = 0; j <= i; j++) {
+      var s = gameData[j].signal != null ? gameData[j].signal : gameData[j].avg;
+      runSum += s; runCount++;
+    }
+    var runMean = runSum / runCount;
+    for (var k = 0; k < gap; k++) {
+      var restDate = new Date(d1.getTime() + (k + 1) * 86400000);
+      var restStr  = restDate.toISOString().slice(0, 10);
+      filled.push({
+        rawDate:  restStr,
+        date:     restDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        signal:   runMean,
+        avg:      runMean,
+        isRestDay: true,
+      });
+    }
+  }
+  return filled;
+}
+
 function analyzePlayerCycles(gameData) {
-  var N = gameData.length;
+  var data = fillRestDays(gameData);
+  var N = data.length;
   if (N < 10) return null;
-  var raw = gameData.map(function(g) { return g.signal != null ? g.signal : g.avg; });
+  var raw = data.map(function(g) { return g.signal != null ? g.signal : g.avg; });
   var mean = raw.reduce(function(a, b) { return a + b; }, 0) / N;
   var signal = raw.map(function(v) { return v - mean; });
   var result = dft(signal);
@@ -462,11 +498,18 @@ function analyzePlayerCycles(gameData) {
   var kept = spectrum.filter(function(c) { return c.amp >= MIN_AMPLITUDE; }).slice(0, MAX_COMPONENTS);
   if (kept.length === 0) return null;
   var components = [{ k:0, re: mean, im: 0 }].concat(kept);
-  var positions = Array.from({ length: N }, function(_, i) { return i; });
-  var reconstructed = reconstructAt(components, N, positions);
-  var ssTot = raw.reduce(function(s, v) { return s + (v - mean) * (v - mean); }, 0);
-  var ssRes = raw.reduce(function(s, v, i) { return s + (v - reconstructed[i]) * (v - reconstructed[i]); }, 0);
+  var allPositions = Array.from({ length: N }, function(_, i) { return i; });
+  var allReconstructed = reconstructAt(components, N, allPositions);
+
+  // R² and reconstructed array aligned to original game rows only (no rest-day fill rows)
+  var gameIndices = [];
+  data.forEach(function(g, i) { if (!g.isRestDay) gameIndices.push(i); });
+  var reconstructed = gameIndices.map(function(i) { return allReconstructed[i]; });
+  var gameRaw = gameIndices.map(function(i) { return raw[i]; });
+  var ssTot = gameRaw.reduce(function(s, v) { return s + (v - mean) * (v - mean); }, 0);
+  var ssRes = gameRaw.reduce(function(s, v, j) { return s + (v - reconstructed[j]) * (v - reconstructed[j]); }, 0);
   var r2 = ssTot > 0 ? Math.max(0, 1 - ssRes / ssTot) : 0;
+
   var forecastPositions = Array.from({ length: FORECAST_DAYS }, function(_, i) { return N + i; });
   var forecastValues = reconstructAt(components, N, forecastPositions);
   var dominantCycles = kept.map(function(c) {
