@@ -81,6 +81,10 @@ var PARK_FACTORS = {
   'SDP': 0.93, // Petco Park — extreme pitcher park
 };
 
+function getParkFactor(venueAbbr) {
+  return venueAbbr ? (PARK_FACTORS[venueAbbr] || 1.0) : 1.0;
+}
+
 // ── Real schedule fetch ────────────────────────────────────────────────────
 var LEAGUE_AVG_ERA = 4.20;
 var _teamsListCache = null;
@@ -373,7 +377,7 @@ async function fetchUpcomingSchedule(teamName) {
           teamWinPct:   standings[teamId] != null ? standings[teamId].winPct : null,
           isHome:       gameDayIsHome[i],
           venueAbbr:    venueAbbr,
-          parkFactor:   venueAbbr ? (PARK_FACTORS[venueAbbr] || 1.00) : 1.00,
+          parkFactor:   getParkFactor(venueAbbr),
           pitcher: pd ? {
             name:         pd.name,
             hand:         pd.hand,
@@ -1166,7 +1170,7 @@ async function backtestGamePlan(teamName, roster, predCache, sbUrl, sbKey, days)
     // Split records for the new predictors
     // Venue is our park when home, opp park when away
     var venueAbbr    = g.isHome ? myAbbr : (abbrById[g.opponentId] || null);
-    var gameParkFactor = venueAbbr ? (PARK_FACTORS[venueAbbr] || 1.0) : 1.0;
+    var gameParkFactor = getParkFactor(venueAbbr);
 
     var myCtx = {
       isHome:          g.isHome,
@@ -1225,10 +1229,6 @@ async function backtestGamePlan(teamName, roster, predCache, sbUrl, sbKey, days)
     var normSuggested = normProbs(predSuggested.winProb, predOppSide.winProb);
 
     var sp = g.spId ? pitcherMap[g.spId] : null;
-
-    // Primary metrics use the actual-lineup prediction for backtesting accuracy
-    var primary     = predActual || predSuggested;
-    var normPrimary = normActual || normSuggested;
     return {
       date:            g.date,
       opponent:        g.opponent,
@@ -1269,18 +1269,9 @@ async function backtestGamePlan(teamName, roster, predCache, sbUrl, sbKey, days)
         runError:       +(Math.abs(predSuggested.predictedRuns - g.myRuns)).toFixed(2),
         wobaError:      boxScore.woba != null ? +(Math.abs(predSuggested.predictedWoba - boxScore.woba)).toFixed(4) : null,
       },
-      // Legacy flat fields
-      predictedRuns:   primary.predictedRuns,
-      predictedWoba:   primary.predictedWoba,
-      predictedWin:    normPrimary.my >= 0.50,
-      winProb:         normPrimary.my,
-      oppRunsEst:      predOppSide.predictedRuns,
-      avgScore:        primary.avgScore,
       oppEra:          +oppEra.toFixed(2),
       oppWinPct:       oppWinPct,
       sp:              sp ? { name: sp.name, hand: sp.hand, era: sp.era } : null,
-      runError:        +(Math.abs(primary.predictedRuns - g.myRuns)).toFixed(2),
-      wobaError:       boxScore.woba != null ? +(Math.abs(primary.predictedWoba - boxScore.woba)).toFixed(4) : null,
     };
   }));
 
@@ -1310,10 +1301,9 @@ async function backtestGamePlan(teamName, roster, predCache, sbUrl, sbKey, days)
     suggestedLineup:  suggestedLineup,
     actualSummary:    actualSummary,
     suggestedSummary: suggestedSummary,
-    // Legacy top-level fields (actual-lineup based)
-    winAccuracy:  actualSummary ? actualSummary.winAccuracy  : (suggestedSummary ? suggestedSummary.winAccuracy  : 0),
-    avgRunMAE:    actualSummary ? actualSummary.avgRunMAE    : (suggestedSummary ? suggestedSummary.avgRunMAE    : 0),
-    avgWobaMAE:   actualSummary ? actualSummary.avgWobaMAE  : (suggestedSummary ? suggestedSummary.avgWobaMAE   : null),
+    winAccuracy:  (actualSummary || suggestedSummary) ? (actualSummary || suggestedSummary).winAccuracy  : 0,
+    avgRunMAE:    (actualSummary || suggestedSummary) ? (actualSummary || suggestedSummary).avgRunMAE    : 0,
+    avgWobaMAE:   (actualSummary || suggestedSummary) ? (actualSummary || suggestedSummary).avgWobaMAE   : null,
     games:        gameRows,
     weights:      Object.assign({}, BACKTEST_WEIGHTS),
   };
@@ -1465,7 +1455,7 @@ async function fetchTodayGames(roster, predCache) {
     var awayEntry  = standings[awayId];
     var homeWinPct = homeEntry != null ? homeEntry.winPct : 0.500;
     var awayWinPct = awayEntry != null ? awayEntry.winPct : 0.500;
-    var gameParkFactor = PARK_FACTORS[homeAbbr] || 1.0;
+    var gameParkFactor = getParkFactor(homeAbbr);
     var homeCtx = {
       isHome:          true,
       homeWinPct:      homeEntry ? homeEntry.homeWinPct      : null,
