@@ -2084,30 +2084,40 @@
                 </div>
               </div>
 
-              {/* Player projections table */}
-              <div style={{background:"#0f172a",borderRadius:8,padding:"10px 12px",marginBottom:10}}>
-                <div style={{fontSize:10,fontWeight:700,color:ACCENT,marginBottom:8,textTransform:"uppercase",letterSpacing:0.8}}>
-                  Projected Lineup Box Score
-                </div>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 36px 44px 44px 44px",gap:"1px 0",fontSize:11}}>
-                  {["Batter","#","H","HR","BB"].map(h=>(
-                    <span key={h} style={{color:"#475569",fontWeight:700,padding:"2px 6px",borderBottom:"1px solid #1e293b"}}>{h}</span>
-                  ))}
-                  {simResult.playerRows.map((p,i)=>{
-                    const name=simResult.playerNames[i];
-                    const lastName=name?name.split(" ").slice(-1)[0]:"—";
-                    return(
-                      <React.Fragment key={i}>
-                        <span style={{color:"#e2e8f0",padding:"4px 6px",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{lastName}</span>
-                        <span style={{color:"#475569",padding:"4px 6px",textAlign:"center"}}>{i+1}</span>
-                        <span style={{color:"#94a3b8",padding:"4px 6px",textAlign:"center"}}>{p.projH}</span>
-                        <span style={{color:p.projHR>=0.10?"#f59e0b":"#64748b",padding:"4px 6px",textAlign:"center",fontWeight:p.projHR>=0.10?700:400}}>{p.projHR}</span>
-                        <span style={{color:"#64748b",padding:"4px 6px",textAlign:"center"}}>{p.projBB}</span>
-                      </React.Fragment>
-                    );
-                  })}
-                </div>
-              </div>
+              {/* Player projections — both teams side by side */}
+              {(()=>{
+                const LineupTable=({rows,names,teamName,accent})=>(
+                  <div style={{background:"#0f172a",borderRadius:8,padding:"10px 12px",flex:1,minWidth:0}}>
+                    <div style={{fontSize:10,fontWeight:700,color:accent,marginBottom:6,textTransform:"uppercase",letterSpacing:0.8,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                      {teamName}
+                    </div>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 28px 38px 38px 38px",gap:"1px 0",fontSize:10}}>
+                      {["Batter","#","H","HR","BB"].map(h=>(
+                        <span key={h} style={{color:"#475569",fontWeight:700,padding:"2px 4px",borderBottom:"1px solid #1e293b"}}>{h}</span>
+                      ))}
+                      {rows.map((p,i)=>{
+                        const name=names[i];
+                        const lastName=name?name.split(" ").slice(-1)[0]:"—";
+                        return(
+                          <React.Fragment key={i}>
+                            <span style={{color:"#e2e8f0",padding:"3px 4px",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{lastName}</span>
+                            <span style={{color:"#475569",padding:"3px 4px",textAlign:"center"}}>{i+1}</span>
+                            <span style={{color:"#94a3b8",padding:"3px 4px",textAlign:"center"}}>{p.projH}</span>
+                            <span style={{color:p.projHR>=0.10?"#f59e0b":"#64748b",padding:"3px 4px",textAlign:"center",fontWeight:p.projHR>=0.10?700:400}}>{p.projHR}</span>
+                            <span style={{color:"#64748b",padding:"3px 4px",textAlign:"center"}}>{p.projBB}</span>
+                          </React.Fragment>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+                return(
+                  <div style={{display:"flex",gap:8,marginBottom:10}}>
+                    <LineupTable rows={simResult.playerRows} names={simResult.playerNames} teamName={myTeam} accent={ACCENT}/>
+                    <LineupTable rows={simResult.oppRows||[]} names={simResult.oppNames||[]} teamName={oppName} accent="#94a3b8"/>
+                  </div>
+                );
+              })()}
 
               {/* Confidence */}
               <div style={{fontSize:10,color:"#475569",display:"flex",gap:12,flexWrap:"wrap"}}>
