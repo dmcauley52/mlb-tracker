@@ -2243,12 +2243,41 @@
                 );
               })()}
 
-              {/* Confidence */}
-              <div style={{fontSize:10,color:"#475569",display:"flex",gap:12,flexWrap:"wrap"}}>
-                <span>Confidence: <span style={{color:confColor(simResult.confidence),fontWeight:700}}>{simResult.confidence}%</span></span>
-                <span>{simResult.usingOfficial?"Official lineup":"Projected lineup"}</span>
-                <span style={{color:"#334155"}}>RBI/R require full tally mode (v2)</span>
-              </div>
+              {/* Data source breakdown */}
+              {(()=>{
+                const srcColor=s=>s.startsWith('db')?'#22c55e':s==='mlb-api'?'#3b82f6':s==='no-id'||s==='mlb-api-fail'?'#ef4444':'#475569';
+                const srcLabel=s=>s.startsWith('db')?'DB':s==='mlb-api'?'API':'AVG';
+                const CovRow=({label,cov})=>(
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:9,color:"#475569",fontWeight:700,marginBottom:4,textTransform:"uppercase",letterSpacing:0.6}}>{label} data sources</div>
+                    {cov.map((c,i)=>(
+                      <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"1px 0",fontSize:10}}>
+                        <span style={{color:"#64748b",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"75%"}}>
+                          {c.name.split(" ").slice(-1)[0]}
+                        </span>
+                        <span style={{color:srcColor(c.source),fontWeight:700,fontSize:9,flexShrink:0,marginLeft:4}}>{srcLabel(c.source)}</span>
+                      </div>
+                    ))}
+                  </div>
+                );
+                return(
+                  <div style={{background:"#0f172a",borderRadius:8,padding:"10px 12px",marginBottom:0}}>
+                    <div style={{display:"flex",gap:4,marginBottom:8}}>
+                      {[['#22c55e','DB (30-game history)'],['#3b82f6','API (season stats)'],['#ef4444','League avg']].map(([c,l])=>(
+                        <div key={l} style={{display:"flex",alignItems:"center",gap:4,fontSize:9,color:"#475569"}}>
+                          <div style={{width:6,height:6,borderRadius:"50%",background:c,flexShrink:0}}/>
+                          <span>{l}</span>
+                        </div>
+                      ))}
+                      <span style={{marginLeft:"auto",fontSize:9,color:"#334155"}}>{simResult.usingOfficial?"Official lineup":"Projected lineup"}</span>
+                    </div>
+                    <div style={{display:"flex",gap:16}}>
+                      <CovRow label={myTeam.split(" ").pop()} cov={simResult.myCoverage||[]}/>
+                      <CovRow label={oppName.split(" ").pop()} cov={simResult.oppCoverage||[]}/>
+                    </div>
+                  </div>
+                );
+              })()}
             </>
           )}
         </div>
