@@ -2595,25 +2595,29 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
 
             return(
               <div style={{display:"flex",gap:12,alignItems:"flex-start",marginBottom:4,flexWrap:"wrap"}}>
-                {/* Historical lineup (sorted by typical batting spot) */}
+                {/* My lineup — official if confirmed, otherwise historical */}
                 <div style={{flex:1,minWidth:0}}>
                   <PredStrip pred={myPred} color="#22c55e" wobaColor={wobaVarianceColor(myWoba, oppWoba)}/>
                   <LineupCard
-                    title={`${myTeam||"My Team"} — Historical`}
+                    title={confirmedLineup
+                      ? `${myTeam||"My Team"} — Official ✓`
+                      : `${myTeam||"My Team"} — Historical`}
                     lineup={likelyLineupArr}
-                    accentColor="#22c55e"
+                    accentColor={confirmedLineup?"#f472b6":"#22c55e"}
                     pitcher={null}
                     teamEra={null}
                     teamWinPct={null}
                   />
                 </div>
-                {/* Opponent */}
+                {/* Opponent — official if confirmed, otherwise historical */}
                 <div style={{flex:1,minWidth:0}}>
                   <PredStrip pred={oppPred} color="#f59e0b" wobaColor={wobaVarianceColor(oppWoba, myWoba)}/>
                   <LineupCard
-                    title={selectedGame?.detail?.teamFullName||selectedGame?.opponent||"Opponent"}
+                    title={confirmedLineup
+                      ? `${selectedGame?.detail?.teamFullName||selectedGame?.opponent||"Opponent"} — Official ✓`
+                      : (selectedGame?.detail?.teamFullName||selectedGame?.opponent||"Opponent")}
                     lineup={oppLineup}
-                    accentColor="#f59e0b"
+                    accentColor={confirmedLineup?"#f472b6":"#f59e0b"}
                     pitcher={selectedGame?.detail?.pitcher||null}
                     teamEra={selectedGame?.detail?.teamEra||null}
                     teamWinPct={selectedGame?.detail?.teamWinPct??null}
