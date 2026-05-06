@@ -1939,18 +1939,14 @@
         if(pollRef.current){clearInterval(pollRef.current);pollRef.current=null;}
         setSimPhase("idle");setOfficialLineup(null);setSimResult(null);setSimError("");
         if(!selectedGame||!myTeam)return;
-        const gameDate=new Date(Date.now()+selectedGame.dayOffset*86400000);
-        const msUntil=gameDate-Date.now();
-        if(msUntil>4*60*60*1000)return;
-        const teamId=selectedGame.detail?.teamId;
+        // Only poll for today's game (dayOffset 0) or past games — future games won't have lineups
+        if(selectedGame.dayOffset>0)return;
+        const iso=new Date().toISOString().slice(0,10);
         const doCheck=async()=>{
           try{
-            // Need our team's ID — look it up via schedule endpoint
-            const iso=gameDate.toISOString().slice(0,10);
-            // Fetch schedule for the specific game to get home/away team IDs
-            const r=await fetch(`https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate=${iso}&endDate=${iso}&hydrate=lineups,teams&teamId=${selectedGame.detail?.homeTeamId||teamId||''}`);
+            // Search by date only — find our team's game in today's schedule
+            const r=await fetch(`https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate=${iso}&endDate=${iso}&hydrate=lineups`);
             const d=await r.json();
-            // Find our game
             const allGames=(d.dates||[]).flatMap(dt=>dt.games||[]);
             const game=allGames.find(g=>
               g.teams.home.team.name===myTeam||g.teams.away.team.name===myTeam
