@@ -2384,6 +2384,7 @@
         }).join("\n"):"Not available";
         const sp=selectedGame.detail?.pitcher;
         const prompt=`You are a baseball manager writing a pregame lineup brief.
+Batting order spots: 1=leadoff, 2=second, 3=third, 4=cleanup, 5=fifth, 6=sixth, 7=seventh, 8=eighth, 9=ninth. Never use a spot name and number to refer to the same position (e.g. do not say "batting cleanup instead of fourth" — cleanup IS fourth).
 
 My Team: ${myTeam}
 Opponent: ${selectedGame.detail?.teamFullName||selectedGame.opponent} (${selectedGame.date})
