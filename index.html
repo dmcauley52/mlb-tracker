@@ -3170,6 +3170,11 @@ Based specifically on the detected cycle periods and forecast direction above â€
                     {view==="timeline"&&(()=>{
                       const tlData = gameData.slice(-60);
                       const hasWoba = tlData.some(g=>g.woba!=null&&g.woba>0);
+                      // Find phase transition points (first game of each new phase)
+                      const phaseTransitions = tlData.reduce((acc,g,i)=>{
+                        if(i===0||g.phase!==tlData[i-1].phase) acc.push({date:g.date,phase:g.phase,color:g.phaseColor});
+                        return acc;
+                      },[]);
                       return (
                       <div style={{...s.card,padding:"20px 12px 12px"}}>
                         <ResponsiveContainer width="100%" height={220}>
@@ -3183,15 +3188,18 @@ Based specifically on the detected cycle periods and forecast direction above â€
                             <YAxis domain={[0.100,0.500]} tick={{fontSize:10,fill:"#64748b"}}/>
                             <Tooltip content={<CustomTooltip/>}/>
                             <ReferenceLine y={0.260} stroke="#64748b" strokeDasharray="4 4" label={{value:".260",fontSize:9,fill:"#64748b"}}/>
-                            <Area type="monotone" dataKey="avg" stroke="#3b82f6" strokeWidth={2} fill="url(#ag)"
-                              dot={({cx,cy,payload})=><circle key={payload.date+payload.cycleDay} cx={cx} cy={cy} r={3} fill={payload.phaseColor} stroke="none"/>}/>
+                            {phaseTransitions.map(t=>(
+                              <ReferenceLine key={t.date+t.phase} x={t.date} stroke={t.color} strokeWidth={1.5} strokeDasharray="3 3"
+                                label={{value:t.phase.slice(0,2),position:"insideTopLeft",fontSize:8,fill:t.color,fontWeight:700}}/>
+                            ))}
+                            <Area type="monotone" dataKey="avg" stroke="#3b82f6" strokeWidth={2} fill="url(#ag)" dot={false}/>
                             {hasWoba&&<Area type="monotone" dataKey="woba" stroke="#f59e0b" strokeWidth={2} fill="url(#wg)" dot={false}/>}
                           </AreaChart>
                         </ResponsiveContainer>
                         <div style={{display:"flex",gap:12,justifyContent:"center",marginTop:10,flexWrap:"wrap"}}>
                           {PHASE_CONFIG.map(p=>(
                             <div key={p.name} style={{display:"flex",alignItems:"center",gap:5,fontSize:11}}>
-                              <div style={{width:8,height:8,borderRadius:"50%",background:p.color}}/><span style={{color:"#94a3b8"}}>{p.name}</span>
+                              <div style={{width:2,height:12,background:p.color,borderRadius:1,opacity:0.8}}/><span style={{color:"#94a3b8"}}>{p.name}</span>
                             </div>
                           ))}
                           {hasWoba&&<div style={{display:"flex",alignItems:"center",gap:5,fontSize:11}}><div style={{width:18,height:2,background:"#f59e0b",borderRadius:1}}/><span style={{color:"#94a3b8"}}>wOBA</span></div>}
