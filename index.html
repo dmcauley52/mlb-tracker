@@ -1993,10 +1993,19 @@
           const myWins=myRunsArr.filter((r,i)=>r>oppRunsArr[i]).length;
           myRunsArr.sort((a,b)=>a-b);oppRunsArr.sort((a,b)=>a-b);
           const pct=(arr,p)=>arr[Math.floor(arr.length*p)];
-          // Per-inning means (median is almost always 0 — most innings scoreless)
-          const innMean=arr=>+(arr.reduce((a,b)=>a+b,0)/arr.length).toFixed(2);
-          const myInnMedians=myInnArr.map(innMean);
-          const oppInnMedians=oppInnArr.map(innMean);
+          // Convert per-inning means into whole-run linescore:
+          // accumulate fractional means; each time the running total crosses an integer, assign 1 run to that inning.
+          const innWhole=arr=>{
+            const means=arr.map(a=>a.reduce((s,b)=>s+b,0)/a.length);
+            const total=means.reduce((s,b)=>s+b,0);
+            let carry=0; const out=means.map(m=>{carry+=m; const r=Math.floor(carry); carry-=r; return r;});
+            // distribute any remaining carry from rounding into the highest-mean inning
+            const rem=Math.round(total)-out.reduce((a,b)=>a+b,0);
+            if(rem>0){let idx=0;means.forEach((m,i)=>{if(m>means[idx])idx=i;});out[idx]+=rem;}
+            return out;
+          };
+          const myInnMedians=innWhole(myInnArr);
+          const oppInnMedians=innWhole(oppInnArr);
           // Per-player projections from distributions × estimated PAs per spot
           const makeRows=(dists)=>dists.map((d,i)=>{
             const pa=SPOT_PA[i]||4.0;
