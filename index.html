@@ -1760,18 +1760,27 @@
     function applySpAdjustment(dist,sp) {
       if(!dist||!sp) return dist;
       const kMult  = Math.min(2.0,Math.max(0.5,(sp.k9||LEAGUE_AVG_K9)/LEAGUE_AVG_K9));
-      const eraAdj = Math.min(1.4,Math.max(0.6,(sp.era||LEAGUE_AVG_ERA)/LEAGUE_AVG_ERA));
-      const newK   = Math.min(0.45,dist.k*kMult);
+      // eraAdj < 1 = better-than-avg SP → reduce hits; >1 = worse → inflate hits
+      // Clamp tightly so we never blow up probabilities
+      const eraAdj = Math.min(1.25,Math.max(0.75,(sp.era||LEAGUE_AVG_ERA)/LEAGUE_AVG_ERA));
+      const newK   = Math.min(0.40,dist.k*kMult);
       const kDelta = newK-dist.k;
       const hitSum = dist.hr+dist.trip+dist.dbl+dist.s1b;
-      const hitScale = hitSum>0?Math.max(0,1-kDelta/hitSum):1;
-      const runScale = 1/eraAdj;
-      return {hr:dist.hr*hitScale*runScale,trip:dist.trip*hitScale*runScale,
-              dbl:dist.dbl*hitScale*runScale,s1b:dist.s1b*hitScale*runScale,
-              bb:dist.bb*runScale,k:newK,
-              out:Math.max(0,1-(dist.hr*hitScale*runScale)-(dist.trip*hitScale*runScale)
-                             -(dist.dbl*hitScale*runScale)-(dist.s1b*hitScale*runScale)
-                             -(dist.bb*runScale)-newK),
+      // Remove k-increase delta from hits proportionally
+      const hitScale = hitSum>0?Math.max(0.5,1-kDelta/Math.max(hitSum,0.01)):1;
+      // ERA scales all positive events, clamped so total never exceeds 0.85
+      const rawHr  = dist.hr  *hitScale*eraAdj;
+      const rawTrip= dist.trip*hitScale*eraAdj;
+      const rawDbl = dist.dbl *hitScale*eraAdj;
+      const raw1b  = dist.s1b *hitScale*eraAdj;
+      const rawBb  = dist.bb  *eraAdj;
+      // Normalise so positive events + K never exceed 0.90 (leaving room for outs)
+      const positiveSum = rawHr+rawTrip+rawDbl+raw1b+rawBb+newK;
+      const norm = positiveSum>0.90 ? 0.90/positiveSum : 1;
+      const hr2=rawHr*norm,trip2=rawTrip*norm,dbl2=rawDbl*norm,
+            s1b2=raw1b*norm,bb2=rawBb*norm,k2=newK*norm;
+      return {hr:hr2,trip:trip2,dbl:dbl2,s1b:s1b2,bb:bb2,k:k2,
+              out:Math.max(0.10,1-hr2-trip2-dbl2-s1b2-bb2-k2),
               paCount:dist.paCount,gameCount:dist.gameCount,fromFallback:dist.fromFallback};
     }
 
