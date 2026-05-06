@@ -1924,7 +1924,7 @@
       return {dists, coverage};
     }
 
-    function MonteCarloSimPanel({myTeam,selectedGame,likelyLineup,oppLineup,sbUrl,sbKey}) {
+    function MonteCarloSimPanel({myTeam,selectedGame,likelyLineup,oppLineup,sbUrl,sbKey,onOfficialLineup}) {
       const [simPhase,      setSimPhase]      = React.useState("idle");
       const [officialLineup,setOfficialLineup]= React.useState(null);
       const [simProgress,   setSimProgress]   = React.useState(0);
