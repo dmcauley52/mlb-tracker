@@ -2031,13 +2031,15 @@
           };
           const myInnMedians=innWhole(myInnArr);
           const oppInnMedians=innWhole(oppInnArr);
-          // Per-player projections from distributions × estimated PAs per spot
-          const makeRows=(dists)=>dists.map((d,i)=>{
+          // Per-player rows: H/HR/BB from distributions, R/RBI from sim means
+          const makeRows=(dists,rSum,rbiSum)=>dists.map((d,i)=>{
             const pa=SPOT_PA[i]||4.0;
             return{
-              projH:+((d.s1b+d.dbl+d.trip+d.hr)*pa).toFixed(2),
-              projHR:+(d.hr*pa).toFixed(2),
-              projBB:+(d.bb*pa).toFixed(2),
+              projH:  +((d.s1b+d.dbl+d.trip+d.hr)*pa).toFixed(2),
+              projHR: +(d.hr*pa).toFixed(2),
+              projBB: +(d.bb*pa).toFixed(2),
+              projR:  +(rSum[i]/TOTAL).toFixed(2),
+              projRBI:+(rbiSum[i]/TOTAL).toFixed(2),
             };
           });
           const hasData=myNames.filter(n=>n&&myGames[n]?.length>=10).length;
@@ -2045,8 +2047,8 @@
             myMedian:pct(myRunsArr,0.5),myP10:pct(myRunsArr,0.1),myP90:pct(myRunsArr,0.9),
             oppMedian:pct(oppRunsArr,0.5),oppP10:pct(oppRunsArr,0.1),oppP90:pct(oppRunsArr,0.9),
             winProb:+(myWins/TOTAL).toFixed(3),
-            playerRows:makeRows(myDists),playerNames:myNames,
-            oppRows:makeRows(oppDists),oppNames,
+            playerRows:makeRows(myDists,myRSum,myRbiSum),playerNames:myNames,
+            oppRows:makeRows(oppDists,oppRSum,oppRbiSum),oppNames,
             myInnMedians,oppInnMedians,
             confidence:Math.round((hasData/Math.min(9,myNames.filter(Boolean).length))*100)||0,
             usingOfficial:!!officialLineup,
