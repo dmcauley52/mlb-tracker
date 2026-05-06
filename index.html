@@ -3258,16 +3258,6 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
         setDataLoading(false);
       },[selectedPlayer,dataSource,sbUrl,sbKey]);
 
-      useEffect(()=>{
-        if(dataSource!=="demo") return;
-        const cache={};
-        DEMO_PLAYERS.forEach((p,idx)=>{
-          const g = genDemo(p.player_name, idx*1.3+1);
-          const ss = {avg:".271",ops:".792",hr:12,rbi:38,hits:44,ab:162,games:45,team:p.team,pos:"OF"};
-          cache[p.player_name] = computePredictionScore(p.player_name, p.team, g, ss);
-        });
-        setPredCache(cache);
-      },[dataSource]);
 
       useEffect(()=>{ loadRoster(); },[loadRoster]);
       useEffect(()=>{ loadGames(); },[loadGames]);
