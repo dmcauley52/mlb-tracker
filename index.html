@@ -1896,15 +1896,16 @@
       }catch{return null;}
     }
 
-    async function buildDistributions(names,gamesMap,sp) {
+    // idMap: optional {playerName -> mlbId} for players not in MLB_IDS hardcoded list
+    async function buildDistributions(names, gamesMap, sp, idMap={}) {
       const LEAGUE_AVG={hr:0.033,trip:0.004,dbl:0.047,s1b:0.145,bb:0.084,k:0.220,
                         out:0.467,paCount:0,gameCount:0,fromFallback:true};
       const dists=[];
       for(let i=0;i<9;i++){
-        const name=names[i];let dist=null;
-        if(name&&gamesMap[name]?.length>=10)dist=computePlayerDistribution(gamesMap[name]);
+        const name=names[i]; let dist=null;
+        if(name&&gamesMap[name]?.length>=10) dist=computePlayerDistribution(gamesMap[name]);
         if(!dist&&name){
-          const mlbId=MLB_IDS[name]||(typeof window!=='undefined'&&window.MLB_IDS?.[name]);
+          const mlbId=MLB_IDS[name]||idMap[name];
           if(mlbId){const stat=await fetchMLBSeasonStats(mlbId);if(stat)dist=distributionFromMLBStats(stat);}
         }
         dists.push(sp?applySpAdjustment(dist||LEAGUE_AVG,sp):(dist||LEAGUE_AVG));
