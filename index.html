@@ -2336,6 +2336,25 @@
         } else { setOppLineup(null); }
       },[selectedGame, roster, predCache, myTeam]);
 
+      // Called by MonteCarloSimPanel when official lineup is confirmed
+      const handleOfficialLineup = React.useCallback((official)=>{
+        setConfirmedLineup(official);
+        // Convert official players to the {spot, player} format used by likelyLineup
+        const toEntry=(p,i)=>{
+          // Try to find matching player in roster for wOBA/score data
+          const rosterPlayer = roster.find(r=>r.player_name===p.fullName)
+            || {player_name:p.fullName, team:myTeam, position:p.primaryPosition?.abbreviation||'', avgWoba:null};
+          return {spot:i+1, player:rosterPlayer};
+        };
+        setLikelyLineup(official.myPlayers.map(toEntry));
+        const oppEntries = official.oppPlayers.map((p,i)=>{
+          const rosterPlayer = roster.find(r=>r.player_name===p.fullName)
+            || {player_name:p.fullName, team:selectedGame?.opponent||'', position:p.primaryPosition?.abbreviation||'', avgWoba:null};
+          return {spot:i+1, player:rosterPlayer};
+        });
+        setOppLineup(oppEntries);
+      },[roster, myTeam, selectedGame]);
+
       const runBacktest = async()=>{
         if(!myTeam||!roster.length) return;
         setBtLoading(true); setBtResult(null); setBtError("");
