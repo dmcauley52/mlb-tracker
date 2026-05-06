@@ -2815,21 +2815,10 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
             .catch(e => setError(e.message))
             .finally(() => setLoading(false));
         } else {
-          // Demo / MLB API mode — use generated demo pitchers
-          setTimeout(() => {
-            const enriched = DEMO_PITCHERS.map(p => {
-              const fftMetric = 'game_score';
-              const { predictionScore, dominantCycleDays, forecast } = buildPitcherForecast(p.gamelogs, fftMetric);
-              const avg = (key) => {
-                const vals = p.gamelogs.map(g => parseFloat(g[key])).filter(v => !isNaN(v));
-                return vals.length ? (vals.reduce((a,b) => a+b, 0) / vals.length).toFixed(2) : '—';
-              };
-              return { ...p, era: avg('era'), whip: avg('whip'), k9: avg('k_per_9'), fftMetric, predictionScore, dominantCycleDays, forecast };
-            }).sort((a,b) => b.predictionScore - a.predictionScore);
-            setPitchers(enriched);
-            setSelected(enriched[0] || null);
-            setLoading(false);
-          }, 300);
+          // MLB API mode — pitchers require Live DB
+          setPitchers([]);
+          setSelected(null);
+          setLoading(false);
         }
       }, [dataSource, sbUrl, sbKey]);
 
