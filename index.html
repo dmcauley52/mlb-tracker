@@ -3162,7 +3162,7 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
       const [dataSource,setDataSource] = useState(() => {
         const url = getCredential("sb-url","sbUrl");
         const key = getCredential("sb-key","sbKey");
-        return (url && key) ? "live" : "demo";
+        return (url && key) ? "live" : "mlb";
       });
       const [mainTab,setMainTab]       = useState("hitters");  // "hitters" | "pitchers"
       const [roster,setRoster]         = useState([]);
