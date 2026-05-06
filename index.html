@@ -2308,7 +2308,7 @@
 
       React.useEffect(()=>{
         if(!myTeam) return;
-        setSchedLoading(true); setSchedule(null); setSelectedGame(null); setMyLineup(null); setLikelyLineup(null); setOppLineup(null); setConfirmedLineup(null); setAiSummary("");
+        setSchedLoading(true); setSchedule(null); setSelectedGame(null); setMyLineup(null); setHistoricalLikely(null); setHistoricalOpp(null); setConfirmedLineup(null); setOfficialLikely(null); setOfficialOpp(null); setAiSummary("");
         setBtResult(null); setBtError("");
         fetchUpcomingSchedule(myTeam).then(sched=>{
           const games = sched.opponents.map((opp,i)=>({
