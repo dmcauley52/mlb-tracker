@@ -3263,7 +3263,7 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
       useEffect(()=>{ loadGames(); },[loadGames]);
 
       useEffect(()=>{
-        if(dataSource==="demo"||!roster.length) return;
+        if(!roster.length) return;
         if(dataSource==="live"&&(!sbUrl||!sbKey)) return;
         const runId = ++batchRunId.current;
         setPredCache({});
