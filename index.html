@@ -1789,18 +1789,28 @@
     function simulateHalfInning(dists,start) {
       let outs=0,runs=0,b=[false,false,false],bIdx=start;
       while(outs<3){
-        const out=samplePA(dists[bIdx%9]); bIdx++;
-        if(out==='hr'){runs+=1+b.filter(Boolean).length;b=[false,false,false];}
-        else if(out==='trip'){runs+=b.filter(Boolean).length;b=[false,false,true];}
-        else if(out==='dbl'){runs+=(b[1]?1:0)+(b[2]?1:0);b=[false,false,b[0]];}
-        else if(out==='s1b'){runs+=(b[1]?1:0)+(b[2]?1:0);b=[true,b[0],false];}
-        else if(out==='bb'){
+        const outcome=samplePA(dists[bIdx%9]); bIdx++;
+        if(outcome==='hr'){
+          runs+=1+b.filter(Boolean).length; b=[false,false,false];
+        } else if(outcome==='trip'){
+          runs+=b.filter(Boolean).length; b=[false,false,true];
+        } else if(outcome==='dbl'){
+          // runner on 3B scores; runner on 2B scores; runner on 1B to 3B
+          runs+=(b[2]?1:0)+(b[1]?1:0);
+          b=[false,false,b[0]];
+        } else if(outcome==='s1b'){
+          // runner on 3B scores; runner on 2B scores ~60% of the time; runner on 1B to 2B
+          runs+=(b[2]?1:0)+(b[1]&&Math.random()<0.60?1:0);
+          b=[true,b[0]&&!b[1],false]; // runner from 1B goes to 2B only if 2B was empty
+        } else if(outcome==='bb'){
           if(b[0]&&b[1]&&b[2])runs++;
           else if(b[0]&&b[1])b=[true,true,true];
           else if(b[0])b=[true,true,b[2]];
           else b[0]=true;
-        }else if(out==='k'){outs++;}
-        else{
+        } else if(outcome==='k'){
+          outs++;
+        } else {
+          // groundout — 15% GDP chance if runner on 1B with <2 outs
           if(b[0]&&outs<2&&Math.random()<0.15){outs+=2;b[0]=false;}
           else outs++;
         }
