@@ -1983,9 +1983,11 @@
           const homeDists=isHome?myDists:oppDists;
           const awayDists=isHome?oppDists:myDists;
           const myRunsArr=[],oppRunsArr=[];
-          // Per-inning accumulators: array of 9 arrays, each holding per-sim run totals
           const myInnArr=Array.from({length:9},()=>[]);
           const oppInnArr=Array.from({length:9},()=>[]);
+          // Per-batter R and RBI accumulators (sum across all sims, divide by TOTAL for mean)
+          const myRSum=new Array(9).fill(0),  myRbiSum=new Array(9).fill(0);
+          const oppRSum=new Array(9).fill(0), oppRbiSum=new Array(9).fill(0);
           const TOTAL=10000,CHUNK=500;
           let done=0;
           await new Promise(resolve=>{
@@ -1993,12 +1995,18 @@
               if(abortRef.current){resolve();return;}
               const end=Math.min(done+CHUNK,TOTAL);
               for(let i=done;i<end;i++){
-                const{homeRuns,awayRuns,hInnings,aInnings}=simulateGame(homeDists,awayDists);
+                const{homeRuns,awayRuns,hInnings,aInnings,hRun,hRbi,aRun,aRbi}=simulateGame(homeDists,awayDists);
                 myRunsArr.push(isHome?homeRuns:awayRuns);
                 oppRunsArr.push(isHome?awayRuns:homeRuns);
                 const myInn=isHome?hInnings:aInnings;
                 const oppInn=isHome?aInnings:hInnings;
-                for(let n=0;n<9;n++){myInnArr[n].push(myInn[n]);oppInnArr[n].push(oppInn[n]);}
+                const myR=isHome?hRun:aRun, myRbi=isHome?hRbi:aRbi;
+                const oppR=isHome?aRun:hRun, oppRbi=isHome?aRbi:hRbi;
+                for(let n=0;n<9;n++){
+                  myInnArr[n].push(myInn[n]); oppInnArr[n].push(oppInn[n]);
+                  myRSum[n]+=myR[n];   myRbiSum[n]+=myRbi[n];
+                  oppRSum[n]+=oppR[n]; oppRbiSum[n]+=oppRbi[n];
+                }
               }
               done=end;setSimProgress(Math.round(done/TOTAL*100));
               if(done<TOTAL)setTimeout(chunk,0);else resolve();
