@@ -2096,6 +2096,51 @@
                 </div>
               </div>
 
+              {/* Linescore */}
+              {simResult.myInnMedians&&(
+                <div style={{background:"#0f172a",borderRadius:8,padding:"10px 12px",marginBottom:12,overflowX:"auto"}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:11,minWidth:420}}>
+                    <thead>
+                      <tr>
+                        <td style={{color:"#475569",fontWeight:700,padding:"2px 6px",width:80}}></td>
+                        {[1,2,3,4,5,6,7,8,9].map(n=>(
+                          <td key={n} style={{color:"#475569",fontWeight:700,textAlign:"center",padding:"2px 4px",width:28}}>{n}</td>
+                        ))}
+                        <td style={{color:"#64748b",fontWeight:700,textAlign:"center",padding:"2px 8px",borderLeft:"1px solid #334155",width:32}}>R</td>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[
+                        {label:myTeam,   medians:simResult.myInnMedians,  total:simResult.myMedian,  color:ACCENT},
+                        {label:oppName,  medians:simResult.oppInnMedians, total:simResult.oppMedian, color:"#94a3b8"},
+                      ].map(({label,medians,total,color})=>(
+                        <tr key={label}>
+                          <td style={{color,fontWeight:700,padding:"4px 6px",fontSize:10,overflow:"hidden",whiteSpace:"nowrap",maxWidth:80,textOverflow:"ellipsis"}}
+                            title={label}>{label.split(" ").pop()}</td>
+                          {medians.map((runs,i)=>{
+                            const hot=runs>=2;
+                            return(
+                              <td key={i} style={{textAlign:"center",padding:"4px 4px",
+                                color:runs===0?"#334155":hot?"#f59e0b":"#94a3b8",
+                                fontWeight:hot?700:400,
+                                background:hot?"rgba(245,158,11,0.08)":"transparent",
+                                borderRadius:3}}>
+                                {runs}
+                              </td>
+                            );
+                          })}
+                          <td style={{textAlign:"center",padding:"4px 8px",fontWeight:800,
+                            color:color,borderLeft:"1px solid #334155",fontSize:13}}>
+                            {total}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <div style={{fontSize:9,color:"#334155",marginTop:6}}>Inning values = median across 10,000 simulations (may not sum exactly to total)</div>
+                </div>
+              )}
+
               {/* Player projections — both teams side by side */}
               {(()=>{
                 const LineupTable=({rows,names,teamName,accent})=>(
