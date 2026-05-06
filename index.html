@@ -2342,6 +2342,7 @@
 
       // Called by MonteCarloSimPanel when official lineup is confirmed
       const handleOfficialLineup = React.useCallback((official)=>{
+        confirmedGamePkRef.current = official.gamePk; // set synchronously so the effect guard sees it
         setConfirmedLineup(official);
         // Convert official players to the {spot, player} format used by likelyLineup
         const toEntry=(p,i)=>{
