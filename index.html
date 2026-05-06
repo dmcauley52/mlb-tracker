@@ -2883,7 +2883,7 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
           const fAvg = (fv.reduce((a,b)=>a+b,0)/fv.length + cycleAnalysis.mean).toFixed(3);
           cycleSection=`Detected performance cycles (DFT analysis, R²=${cycleAnalysis.r2.toFixed(2)}):\n${cycles}\nForecast next 7 games: trend is ${fDir}, projected avg ~${fAvg}`;
         } else {
-          const ps=PHASE_CONFIG.map(p=>`  ${p.name}: AVG ${phaseAvg(gameData,p.name,"avg")}, OPS ${phaseAvg(gameData,p.name,"ops")}`).join("\n");
+          const ps=activePhaseConfig.map(p=>`  ${p.name}: AVG ${phaseAvg(gameData,p.name,"avg")}, OPS ${phaseAvg(gameData,p.name,"ops")}`).join("\n");
           cycleSection=`Fixed 28-day cycle phase averages (insufficient data for DFT):\n${ps}\nCurrent: ${currentPhase?.name} phase, day ${currentCycleDay+1}/${CYCLE_LENGTH}`;
         }
         const predLine=currentPred?`\nPerformance prediction score: ${currentPred.score}/99 (${currentPred.tier}) — ${currentPred.label}`:"";
