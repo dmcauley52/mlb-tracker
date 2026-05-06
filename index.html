@@ -50,46 +50,6 @@
       "Ketel Marte":606466, "Christian Yelich":592885, "Teoscar Hernández":606192,
     };
 
-    const DEMO_PLAYERS = Object.keys(MLB_IDS).slice(0,6).map(name=>({player_name:name,team:"MLB"}));
-
-    const rng = s => { let x = Math.sin(s)*10000; return x - Math.floor(x); };
-    const genDemo = (name, seed) => Array.from({length:90}, (_, i) => {
-      const d = new Date(); d.setDate(d.getDate() - (89 - i));
-      const cyc = i % CYCLE_LENGTH, ph = getPhase(cyc);
-      const avg = Math.max(0.1, Math.min(0.5,
-        0.260 + 0.040 * Math.sin((2*Math.PI*i)/CYCLE_LENGTH + seed) + (rng(seed*i+1)-0.5)*0.08));
-      return {
-        date: d.toLocaleDateString("en-US",{month:"short",day:"numeric"}),
-        cycleDay:cyc, phase:ph.name, phaseColor:ph.color,
-        avg:+avg.toFixed(3), ops:+(avg*1.7+rng(seed*i+2)*0.15).toFixed(3), signal:+avg.toFixed(3), woba:null,
-        hits:Math.floor(rng(seed*i+3)*3)+(ph.name==="Surge"?1:0),
-        hr:rng(seed*i+4)>0.88?1:0, ab:Math.floor(rng(seed*i+5)*3)+2, rbi:0,
-      };
-    });
-
-    // Demo pitcher data generator
-    const genDemoPitcher = (name, seed) => {
-      const starts = Array.from({length: 20}, (_, i) => {
-        const d = new Date(); d.setDate(d.getDate() - (19 - i) * 5);
-        const era  = Math.max(1.0, Math.min(8.0, 3.80 + 1.2*Math.sin((2*Math.PI*i)/6 + seed) + (rng(seed*i+1)-0.5)*0.8));
-        const whip = Math.max(0.8, Math.min(2.0, 1.20 + 0.3*Math.sin((2*Math.PI*i)/6 + seed+1) + (rng(seed*i+2)-0.5)*0.3));
-        const k9   = Math.max(4.0, Math.min(14.0, 9.0 + 2.0*Math.sin((2*Math.PI*i)/8 + seed+2) + (rng(seed*i+3)-0.5)*1.5));
-        const gs   = Math.max(20, Math.min(85, 58 + 18*Math.sin((2*Math.PI*i)/6 + seed) + (rng(seed*i+4)-0.5)*12));
-        const ip   = Math.max(3.0, Math.min(9.0, 5.5 + 1.5*Math.sin((2*Math.PI*i)/7 + seed) + (rng(seed*i+5)-0.5)*1.0));
-        return {
-          game_date: d.toISOString().slice(0,10),
-          era: +era.toFixed(2), whip: +whip.toFixed(2),
-          k_per_9: +k9.toFixed(1), game_score: Math.round(gs),
-          innings_pitched: +ip.toFixed(1),
-        };
-      });
-      return starts;
-    };
-
-    const DEMO_PITCHERS = [
-      "Gerrit Cole","Clayton Kershaw","Max Scherzer","Justin Verlander",
-      "Jacob deGrom","Shane Bieber","Corbin Burnes","Sandy Alcantara",
-    ].map((name, i) => ({ name, gamelogs: genDemoPitcher(name, i * 1.7 + 1) }));
 
 
     const CustomTooltip = ({active,payload}) => {
