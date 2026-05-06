@@ -1982,9 +1982,10 @@
             setTimeout(chunk,0);
           });
           if(abortRef.current)return;
+          // Count wins BEFORE sorting (pairing is index-aligned from the sim loop)
+          const myWins=myRunsArr.filter((r,i)=>r>oppRunsArr[i]).length;
           myRunsArr.sort((a,b)=>a-b);oppRunsArr.sort((a,b)=>a-b);
           const pct=(arr,p)=>arr[Math.floor(arr.length*p)];
-          const myWins=myRunsArr.filter((_,i)=>myRunsArr[i]>oppRunsArr[i]).length;
           // Per-player projections from distributions × estimated PAs per spot
           const playerRows=myDists.map((d,i)=>{
             const pa=SPOT_PA[i]||4.0;
