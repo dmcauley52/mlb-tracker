@@ -2800,7 +2800,12 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
       };
 
       const currentCycleDay = gameData.length?gameData[gameData.length-1].cycleDay:0;
-      const currentPhase = getPhase(currentCycleDay);
+      // Use DFT-derived phase from last game row when available; fall back to static lookup
+      const lastGamePhase = gameData.length ? gameData[gameData.length-1].phase : null;
+      const activePhaseConfig = (cycleAnalysis?.dynamicPhaseConfig) || PHASE_CONFIG;
+      const currentPhase = lastGamePhase
+        ? (activePhaseConfig.find(p=>p.name===lastGamePhase) || getPhase(currentCycleDay))
+        : getPhase(currentCycleDay);
 
       const teams = ["ALL",...Array.from(new Set(roster.map(p=>p.team))).sort()];
       const filteredRoster = roster
