@@ -1828,12 +1828,13 @@
     }
 
     function simulateGame(homeDists,awayDists) {
-      let hR=0,aR=0,hB=0,aB=0;
+      let hB=0,aB=0;
+      const hInnings=[],aInnings=[];
       for(let inn=0;inn<9;inn++){
-        const ah=simulateHalfInning(awayDists,aB);aR+=ah.runs;aB=ah.nextBatter;
-        const hh=simulateHalfInning(homeDists,hB);hR+=hh.runs;hB=hh.nextBatter;
+        const ah=simulateHalfInning(awayDists,aB);aInnings.push(ah.runs);aB=ah.nextBatter;
+        const hh=simulateHalfInning(homeDists,hB);hInnings.push(hh.runs);hB=hh.nextBatter;
       }
-      return{homeRuns:hR,awayRuns:aR};
+      return{homeRuns:hInnings.reduce((a,b)=>a+b,0),awayRuns:aInnings.reduce((a,b)=>a+b,0),hInnings,aInnings};
     }
 
     async function fetchLast30Games(sbUrl,sbKey,playerNames) {
