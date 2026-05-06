@@ -3472,8 +3472,8 @@ Based specifically on the detected cycle periods and forecast direction above �
             {/* Source bar */}
             <div style={{...s.card,marginBottom:20}}>
               <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
-                {[["demo","🎭 Demo"],["mlb","⚾ MLB API"],["live","🔴 Supabase"]].map(([m,label])=>(
-                  <button key={m} onClick={()=>setDataSource(m)} style={s.btn(dataSource===m,m==="live"?"#22c55e":m==="mlb"?"#f59e0b":"#3b82f6")}>{label}</button>
+                {[["live","🔴 Live DB"],["mlb","⚾ MLB API"]].map(([m,label])=>(
+                  <button key={m} onClick={()=>setDataSource(m)} style={s.btn(dataSource===m,m==="live"?"#22c55e":"#f59e0b")}>{label}</button>
                 ))}
                 {rosterLoading&&<span style={{fontSize:12,color:"#64748b",alignSelf:"center"}}>Loading...</span>}
                 {dataSource==="live"&&!rosterLoading&&roster.length>0&&!rosterError&&<span style={{fontSize:12,color:"#22c55e",alignSelf:"center"}}>✓ {roster.length} players</span>}
