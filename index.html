@@ -1795,32 +1795,31 @@
       return 'out';
     }
 
-    // b[] stores batter index (0-8) of runner on each base, or -1 if empty
-    function simulateHalfInning(dists,start,rTally,rbiTally) {
-      let outs=0, b=[-1,-1,-1], bIdx=start;
-      const score=(runner,rbiBatter)=>{
-        if(runner>=0) rTally[runner]++;
-        if(rbiBatter>=0) rbiTally[rbiBatter]++;
+    // bases store batter slot index (0-8) of the runner, or -1 if empty
+    // rTally/rbiTally are length-9 arrays accumulated across the full game
+    function simulateHalfInning(dists, start, rTally, rbiTally) {
+      let outs=0, b=[-1,-1,-1], bIdx=start, innRuns=0;
+      const score=(runner, rbi)=>{
+        if(runner>=0){ rTally[runner]++; innRuns++; }
+        if(rbi>=0)    rbiTally[rbi]++;
       };
       while(outs<3){
         const bat=bIdx%9, outcome=samplePA(dists[bat]); bIdx++;
         if(outcome==='hr'){
-          // batter + all runners score; batter gets RBI for each
-          [b[2],b[1],b[0],bat].forEach(r=>{ if(r>=0){rTally[r]++;rbiTally[bat]++;} });
+          [b[2],b[1],b[0]].forEach(r=>score(r,bat));
+          score(bat,bat);            // batter scores + RBI for self
           b=[-1,-1,-1];
         } else if(outcome==='trip'){
           [b[2],b[1],b[0]].forEach(r=>score(r,bat));
           b=[-1,-1,bat];
         } else if(outcome==='dbl'){
           score(b[2],bat); score(b[1],bat);
-          b=[-1,-1,b[0]>=0?b[0]:-1]; // runner from 1B to 3B, no RBI (scored from 2B/3B)
-          // Note: runner from 1B reaching 3B on a double doesn't score, no RBI for that
+          b=[-1,-1, b[0]];           // runner from 1B advances to 3B (no score)
         } else if(outcome==='s1b'){
           score(b[2],bat);
-          const s2scores=b[1]>=0&&Math.random()<0.60;
-          if(s2scores) score(b[1],bat);
-          const r1=b[0]; const r2stayed=b[1]>=0&&!s2scores?b[1]:-1;
-          b=[bat, r1>=0?r1:-1, r2stayed];
+          const s2=b[1]>=0&&Math.random()<0.60;
+          if(s2) score(b[1],bat);
+          b=[bat, b[0], s2?-1:b[1]];
         } else if(outcome==='bb'){
           if(b[0]>=0&&b[1]>=0&&b[2]>=0){ score(b[2],bat); b=[bat,b[0],b[1]]; }
           else if(b[0]>=0&&b[1]>=0)     { b=[bat,b[0],b[1]]; }
@@ -1833,32 +1832,23 @@
           else outs++;
         }
       }
-      return{runs:rTally.reduce((a,x)=>a+x,0), nextBatter:bIdx%9};
+      return{ innRuns, nextBatter: bIdx%9 };
     }
 
-    function simulateGame(homeDists,awayDists) {
-      let hB=0,aB=0;
-      const hInnings=[],aInnings=[];
-      // Per-batter tally arrays, reset each game
-      const hR=new Array(9).fill(0), hRBI=new Array(9).fill(0);
-      const aR=new Array(9).fill(0), aRBI=new Array(9).fill(0);
-      // simulateHalfInning accumulates into these arrays across all innings
+    function simulateGame(homeDists, awayDists) {
+      let hB=0, aB=0;
+      const hInnings=[], aInnings=[];
       const hRun=new Array(9).fill(0), hRbi=new Array(9).fill(0);
       const aRun=new Array(9).fill(0), aRbi=new Array(9).fill(0);
       for(let inn=0;inn<9;inn++){
-        const aPre=aRun.reduce((a,b)=>a+b,0);
-        simulateHalfInning(awayDists,aB,aRun,aRbi); aB=aB; // nextBatter tracked inside
-        const ah={runs:aRun.reduce((a,b)=>a+b,0)-aPre};
-        // re-run to get nextBatter — fold it in cleanly:
-        aInnings.push(ah.runs);
-
-        const hPre=hRun.reduce((a,b)=>a+b,0);
-        simulateHalfInning(homeDists,hB,hRun,hRbi);
-        hInnings.push(hRun.reduce((a,b)=>a+b,0)-hPre);
+        const ah=simulateHalfInning(awayDists,aB,aRun,aRbi);
+        aInnings.push(ah.innRuns); aB=ah.nextBatter;
+        const hh=simulateHalfInning(homeDists,hB,hRun,hRbi);
+        hInnings.push(hh.innRuns); hB=hh.nextBatter;
       }
       return{
-        homeRuns:hInnings.reduce((a,b)=>a+b,0),
-        awayRuns:aInnings.reduce((a,b)=>a+b,0),
+        homeRuns: hInnings.reduce((a,b)=>a+b,0),
+        awayRuns: aInnings.reduce((a,b)=>a+b,0),
         hInnings, aInnings,
         hRun, hRbi, aRun, aRbi,
       };
