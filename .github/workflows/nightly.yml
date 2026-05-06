@@ -14,9 +14,13 @@ on:
           - migrate-cache
           - backfill-games
           - nightly-cache
+          - migrate-predictions
+          - predict-games
+          - prediction-outcomes
 
   schedule:
-    - cron: '0 9 * * *'   # 9 AM UTC — after all games are final
+    - cron: '0 9 * * *'   # 9 AM UTC — after all games are final (outcomes + gamelogs)
+    - cron: '0 22 * * *'  # 10 PM UTC / 6 PM ET — lineups posted, run predictions
 
 jobs:
   fetch:
@@ -36,6 +40,12 @@ jobs:
       - name: Create cache tables (run once)
         if: github.event.inputs.mode == 'migrate-cache'
         run: python migrate_cache_tables.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: Create game_predictions table (run once)
+        if: github.event.inputs.mode == 'migrate-predictions'
+        run: python migrate_game_predictions.py
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
@@ -130,3 +140,22 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           KALSHI_API_KEY_ID: ${{ secrets.KALSHI_API_KEY_ID }}
           KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}
+
+      # ── Prediction outcomes (9 AM run — fill actual scores after games finish) ──
+      - name: Fill prediction outcomes
+        if: >
+          github.event.inputs.mode == 'nightly' ||
+          github.event.inputs.mode == 'prediction-outcomes' ||
+          github.event.inputs.mode == ''
+        run: python fetch_prediction_outcomes.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      # ── Game predictions (10 PM UTC run — lineups posted by ~6 PM ET) ─────────
+      - name: Run game predictions (MC + wOBA)
+        if: >
+          github.event.inputs.mode == 'predict-games' ||
+          github.event_name == 'schedule' && github.event.schedule == '0 22 * * *'
+        run: python fetch_game_predictions.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
