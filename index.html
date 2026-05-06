@@ -2322,17 +2322,22 @@
 
       React.useEffect(()=>{
         if(!selectedGame||!myTeam) return;
-        setConfirmedLineup(null); // clear confirmed lineup when game changes
+        // If game changed, clear the confirmed lineup ref so historical loads first
+        confirmedGamePkRef.current = null;
+        setConfirmedLineup(null);
         const oppFull = selectedGame.detail?.teamFullName;
         const myPool = roster.filter(p=>p.team===myTeam&&(p.gamesPlayed||0)>=5)
           .sort((a,b)=>(predCache[b.player_name]?.score||0)-(predCache[a.player_name]?.score||0)).slice(0,14);
         setMyLineup(buildOptimalLineup(myPool, predCache));
-        setLikelyLineup(buildOpponentLineup(myPool, predCache));
-        if(oppFull){
-          const oppPool = roster.filter(p=>p.team===oppFull&&(p.gamesPlayed||0)>=5)
-            .sort((a,b)=>(predCache[b.player_name]?.score||0)-(predCache[a.player_name]?.score||0)).slice(0,14);
-          setOppLineup(buildOpponentLineup(oppPool, predCache));
-        } else { setOppLineup(null); }
+        // Only set historical lineup if official hasn't arrived yet for this game
+        if(!confirmedGamePkRef.current){
+          setLikelyLineup(buildOpponentLineup(myPool, predCache));
+          if(oppFull){
+            const oppPool = roster.filter(p=>p.team===oppFull&&(p.gamesPlayed||0)>=5)
+              .sort((a,b)=>(predCache[b.player_name]?.score||0)-(predCache[a.player_name]?.score||0)).slice(0,14);
+            setOppLineup(buildOpponentLineup(oppPool, predCache));
+          } else { setOppLineup(null); }
+        }
       },[selectedGame, roster, predCache, myTeam]);
 
       // Called by MonteCarloSimPanel when official lineup is confirmed
