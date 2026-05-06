@@ -2324,24 +2324,25 @@
         }).catch(()=>setSchedLoading(false));
       },[myTeam]);
 
+      // Reset official lineup when game changes
+      React.useEffect(()=>{
+        setConfirmedLineup(null); setOfficialLikely(null); setOfficialOpp(null);
+      },[selectedGame]);
+
+      // Build historical lineup — runs whenever game/roster/predCache changes
+      // Never touches official state so the two can't race
       React.useEffect(()=>{
         if(!selectedGame||!myTeam) return;
-        // If game changed, clear the confirmed lineup ref so historical loads first
-        confirmedGamePkRef.current = null;
-        setConfirmedLineup(null);
         const oppFull = selectedGame.detail?.teamFullName;
         const myPool = roster.filter(p=>p.team===myTeam&&(p.gamesPlayed||0)>=5)
           .sort((a,b)=>(predCache[b.player_name]?.score||0)-(predCache[a.player_name]?.score||0)).slice(0,14);
         setMyLineup(buildOptimalLineup(myPool, predCache));
-        // Only set historical lineup if official hasn't arrived yet for this game
-        if(!confirmedGamePkRef.current){
-          setLikelyLineup(buildOpponentLineup(myPool, predCache));
-          if(oppFull){
-            const oppPool = roster.filter(p=>p.team===oppFull&&(p.gamesPlayed||0)>=5)
-              .sort((a,b)=>(predCache[b.player_name]?.score||0)-(predCache[a.player_name]?.score||0)).slice(0,14);
-            setOppLineup(buildOpponentLineup(oppPool, predCache));
-          } else { setOppLineup(null); }
-        }
+        setHistoricalLikely(buildOpponentLineup(myPool, predCache));
+        if(oppFull){
+          const oppPool = roster.filter(p=>p.team===oppFull&&(p.gamesPlayed||0)>=5)
+            .sort((a,b)=>(predCache[b.player_name]?.score||0)-(predCache[a.player_name]?.score||0)).slice(0,14);
+          setHistoricalOpp(buildOpponentLineup(oppPool, predCache));
+        } else { setHistoricalOpp(null); }
       },[selectedGame, roster, predCache, myTeam]);
 
       // Called by MonteCarloSimPanel when official lineup is confirmed
