@@ -2118,7 +2118,7 @@
                           <td style={{color,fontWeight:700,padding:"4px 6px",fontSize:10,overflow:"hidden",whiteSpace:"nowrap",maxWidth:80,textOverflow:"ellipsis"}}
                             title={label}>{label.split(" ").pop()}</td>
                           {medians.map((runs,i)=>{
-                            const hot=runs>=2;
+                            const hot=runs>=0.60;
                             return(
                               <td key={i} style={{textAlign:"center",padding:"4px 4px",
                                 color:runs===0?"#334155":hot?"#f59e0b":"#94a3b8",
