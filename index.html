@@ -3133,7 +3133,7 @@ Based specifically on the detected cycle periods and forecast direction above 鈥
                         <div style={{fontSize:12,color:"#64748b"}}>{seasonStats?.team||selectedPlayer.team}{seasonStats?.pos?` 路 ${seasonStats.pos}`:""} 路 {SEASON}</div>
                         <div style={{fontSize:13,color:currentPhase?.color,fontWeight:700,marginTop:4}}>
                           {cycleAnalysis
-                            ? `Detected cycles: ${cycleAnalysis.dominantCycles.slice(0,2).map(c=>c.periodDays+"d").join(", ")} 路 R虏: ${cycleAnalysis.r2.toFixed(2)}`
+                            ? `${currentPhase?.name} 路 day ${currentCycleDay+1}/${cycleAnalysis.dominantPeriod} 路 cycles: ${cycleAnalysis.dominantCycles.slice(0,2).map(c=>c.periodDays+"d").join(", ")} 路 R虏: ${cycleAnalysis.r2.toFixed(2)}`
                             : `${currentPhase?.name} Phase 路 Day ${currentCycleDay+1}/${CYCLE_LENGTH}`}
                         </div>
                         {currentPred&&(
