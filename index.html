@@ -2441,6 +2441,18 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
             </div>
           )}
 
+          {/* ── Monte Carlo Sim ── */}
+          {selectedGame&&(
+            <MonteCarloSimPanel
+              myTeam={myTeam}
+              selectedGame={selectedGame}
+              likelyLineup={likelyLineup}
+              oppLineup={oppLineup}
+              sbUrl={sbUrl}
+              sbKey={sbKey}
+            />
+          )}
+
           {/* ── Backtest Panel ── */}
           {myTeam&&(
             <div style={{background:"#1e293b",borderRadius:12,padding:16,marginTop:16}}>
