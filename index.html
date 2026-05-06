@@ -3282,27 +3282,39 @@ Based specifically on the detected cycle periods and forecast direction above â€
 
                     {/* Phases */}
                     {view==="phases"&&(
-                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-                        {PHASE_CONFIG.map(p=>{
-                          const pg=gameData.filter(g=>g.phase===p.name), isActive=p.name===currentPhase?.name;
-                          return(
-                            <div key={p.name} style={{...s.card,borderTop:`3px solid ${p.color}`,outline:isActive?`1px solid ${p.color}`:undefined}}>
-                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-                                <div style={{fontWeight:700,color:p.color,fontSize:14}}>{p.name}</div>
-                                {isActive&&<span style={{fontSize:10,background:p.color+"33",color:p.color,padding:"2px 7px",borderRadius:10}}>NOW</span>}
-                              </div>
-                              <div style={{fontSize:11,color:"#64748b",marginBottom:10}}>{p.desc}</div>
-                              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
-                                {[["AVG",phaseAvg(gameData,p.name,"avg")],["OPS",phaseAvg(gameData,p.name,"ops")],["Hits",pg.reduce((s,g)=>s+g.hits,0)],["HRs",pg.reduce((s,g)=>s+g.hr,0)]].map(([label,val])=>(
-                                  <div key={label} style={{background:"#0f172a",borderRadius:8,padding:"8px 10px"}}>
-                                    <div style={{fontSize:10,color:"#64748b"}}>{label}</div>
-                                    <div style={{fontSize:17,fontWeight:800}}>{val}</div>
+                      <div>
+                        {cycleAnalysis?.dynamicPhaseConfig&&(
+                          <div style={{fontSize:11,color:"#64748b",marginBottom:10,paddingLeft:2}}>
+                            Dynamic phases derived from {cycleAnalysis.dominantPeriod}-game dominant cycle Â· durations reflect this player's actual rhythm
+                          </div>
+                        )}
+                        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                          {activePhaseConfig.map(p=>{
+                            const pg=gameData.filter(g=>g.phase===p.name), isActive=p.name===currentPhase?.name;
+                            return(
+                              <div key={p.name} style={{...s.card,borderTop:`3px solid ${p.color}`,outline:isActive?`1px solid ${p.color}`:undefined}}>
+                                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                                  <div style={{fontWeight:700,color:p.color,fontSize:14}}>{p.name}</div>
+                                  <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                                    {p.avgGames!=null&&(
+                                      <span style={{fontSize:10,color:"#475569"}}>~{p.avgGames}g</span>
+                                    )}
+                                    {isActive&&<span style={{fontSize:10,background:p.color+"33",color:p.color,padding:"2px 7px",borderRadius:10}}>NOW</span>}
                                   </div>
-                                ))}
+                                </div>
+                                <div style={{fontSize:11,color:"#64748b",marginBottom:10}}>{p.desc}</div>
+                                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
+                                  {[["AVG",phaseAvg(gameData,p.name,"avg")],["OPS",phaseAvg(gameData,p.name,"ops")],["Hits",pg.reduce((s,g)=>s+g.hits,0)],["HRs",pg.reduce((s,g)=>s+g.hr,0)]].map(([label,val])=>(
+                                    <div key={label} style={{background:"#0f172a",borderRadius:8,padding:"8px 10px"}}>
+                                      <div style={{fontSize:10,color:"#64748b"}}>{label}</div>
+                                      <div style={{fontSize:17,fontWeight:800}}>{val}</div>
+                                    </div>
+                                  ))}
+                                </div>
                               </div>
-                            </div>
-                          );
-                        })}
+                            );
+                          })}
+                        </div>
                       </div>
                     )}
 
