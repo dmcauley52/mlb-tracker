@@ -3193,9 +3193,6 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
       const batchRunId = useRef(0);
 
       const loadRoster = useCallback(async()=>{
-        if(dataSource==="demo"){
-          setRoster(DEMO_PLAYERS); setSelectedPlayer(DEMO_PLAYERS.find(p=>teamFilter&&teamFilter!=='ALL'&&p.team===teamFilter)||DEMO_PLAYERS[0]); setRosterError(""); return;
-        }
         if(dataSource==="mlb"){
           setRoster(Object.keys(MLB_IDS).map(name=>({player_name:name,team:"MLB"}))); setSelectedPlayer(null); setRosterError(""); return;
         }
