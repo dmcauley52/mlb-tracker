@@ -2000,7 +2000,8 @@
             myMedian:pct(myRunsArr,0.5),myP10:pct(myRunsArr,0.1),myP90:pct(myRunsArr,0.9),
             oppMedian:pct(oppRunsArr,0.5),oppP10:pct(oppRunsArr,0.1),oppP90:pct(oppRunsArr,0.9),
             winProb:+(myWins/TOTAL).toFixed(3),
-            playerRows,playerNames:myNames,
+            playerRows:makeRows(myDists),playerNames:myNames,
+            oppRows:makeRows(oppDists),oppNames,
             confidence:Math.round((hasData/Math.min(9,myNames.filter(Boolean).length))*100)||0,
             usingOfficial:!!officialLineup,
           });
