@@ -1995,10 +1995,12 @@
             fetchLast30Games(sbUrl,sbKey,myNames.filter(Boolean)),
             fetchLast30Games(sbUrl,sbKey,oppNames.filter(Boolean)),
           ]);
-          const [myDists,oppDists]=await Promise.all([
+          const [myBuild,oppBuild]=await Promise.all([
             buildDistributions(myNames,myGames,sp,myIdMap),
             buildDistributions(oppNames,oppGames,null,oppIdMap),
           ]);
+          const myDists=myBuild.dists, oppDists=oppBuild.dists;
+          const myCoverage=myBuild.coverage, oppCoverage=oppBuild.coverage;
           const isHome=officialLineup?.isHome??selectedGame?.detail?.isHome??true;
           const homeDists=isHome?myDists:oppDists;
           const awayDists=isHome?oppDists:myDists;
