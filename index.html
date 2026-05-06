@@ -2013,6 +2013,7 @@
             winProb:+(myWins/TOTAL).toFixed(3),
             playerRows:makeRows(myDists),playerNames:myNames,
             oppRows:makeRows(oppDists),oppNames,
+            myInnMedians,oppInnMedians,
             confidence:Math.round((hasData/Math.min(9,myNames.filter(Boolean).length))*100)||0,
             usingOfficial:!!officialLineup,
           });
