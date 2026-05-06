@@ -2346,23 +2346,16 @@
       },[selectedGame, roster, predCache, myTeam]);
 
       // Called by MonteCarloSimPanel when official lineup is confirmed
+      // Only sets official* state — never touches historical*, so the two can't overwrite each other
       const handleOfficialLineup = React.useCallback((official)=>{
-        confirmedGamePkRef.current = official.gamePk; // set synchronously so the effect guard sees it
         setConfirmedLineup(official);
-        // Convert official players to the {spot, player} format used by likelyLineup
-        const toEntry=(p,i)=>{
-          // Try to find matching player in roster for wOBA/score data
-          const rosterPlayer = roster.find(r=>r.player_name===p.fullName)
-            || {player_name:p.fullName, team:myTeam, position:p.primaryPosition?.abbreviation||'', avgWoba:null};
-          return {spot:i+1, player:rosterPlayer};
+        const toEntry=(p,i,team)=>{
+          const rosterPlayer=roster.find(r=>r.player_name===p.fullName)
+            ||{player_name:p.fullName,team,position:p.primaryPosition?.abbreviation||'',avgWoba:null};
+          return{spot:i+1,player:rosterPlayer};
         };
-        setLikelyLineup(official.myPlayers.map(toEntry));
-        const oppEntries = official.oppPlayers.map((p,i)=>{
-          const rosterPlayer = roster.find(r=>r.player_name===p.fullName)
-            || {player_name:p.fullName, team:selectedGame?.opponent||'', position:p.primaryPosition?.abbreviation||'', avgWoba:null};
-          return {spot:i+1, player:rosterPlayer};
-        });
-        setOppLineup(oppEntries);
+        setOfficialLikely(official.myPlayers.map((p,i)=>toEntry(p,i,myTeam)));
+        setOfficialOpp(official.oppPlayers.map((p,i)=>toEntry(p,i,selectedGame?.opponent||'')));
       },[roster, myTeam, selectedGame]);
 
       const runBacktest = async()=>{
