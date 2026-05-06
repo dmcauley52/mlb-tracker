@@ -1987,7 +1987,7 @@
           myRunsArr.sort((a,b)=>a-b);oppRunsArr.sort((a,b)=>a-b);
           const pct=(arr,p)=>arr[Math.floor(arr.length*p)];
           // Per-player projections from distributions × estimated PAs per spot
-          const playerRows=myDists.map((d,i)=>{
+          const makeRows=(dists)=>dists.map((d,i)=>{
             const pa=SPOT_PA[i]||4.0;
             return{
               projH:+((d.s1b+d.dbl+d.trip+d.hr)*pa).toFixed(2),
