@@ -519,7 +519,62 @@ function analyzePlayerCycles(gameData) {
       pctVariance: +(100 * c.amp*c.amp / totalPower).toFixed(1),
     };
   });
-  return { dominantCycles: dominantCycles, reconstructed: reconstructed, forecastValues: forecastValues, components: components, N: N, mean: mean, r2: r2 };
+
+  // Build dynamic phase config from the dominant cycle's shape.
+  // Walk one full period of the reconstruction, bucket each position into a quadrant
+  // (level × slope), and count how many positions fall in each phase. This gives
+  // realistic per-player phase durations instead of fixed 7-day quarters.
+  var dynamicPhaseConfig = (function() {
+    var dom = kept[0];
+    if (!dom) return null;
+    var period = Math.round(dom.periodDays);
+    if (period < 2) return null;
+    // Sample one full dominant cycle at fine resolution using only that component
+    var oneComponents = [{ k:0, re: mean, im: 0 }, dom];
+    var sampleN = period * 4; // 4 samples per game for smooth counting
+    var cyclePositions = Array.from({ length: sampleN }, function(_, i) { return i * period / sampleN; });
+    // Manually evaluate the one-component DFT at fractional positions
+    var cycleVals = cyclePositions.map(function(pos) {
+      return mean + (dom.re * Math.cos(2 * Math.PI * dom.k * pos / N) -
+                     dom.im * Math.sin(2 * Math.PI * dom.k * pos / N)) * 2;
+    });
+    // Count samples per phase quadrant
+    var counts = [0, 0, 0, 0]; // Surge, Cruise, Slide, Rebuild
+    for (var si = 0; si < sampleN; si++) {
+      var cv   = cycleVals[si] - mean;
+      var cnxt = cycleVals[(si + 1) % sampleN] - mean;
+      var cslp = cnxt - cv;
+      var qi = (cv > 0 && cslp > 0) ? 0
+             : (cv > 0 && cslp <= 0) ? 1
+             : (cv <= 0 && cslp <= 0) ? 2
+             : 3;
+      counts[qi]++;
+    }
+    return PHASE_CONFIG.map(function(p, i) {
+      var avgGames = Math.max(1, Math.round(counts[i] * period / sampleN));
+      return Object.assign({}, p, { avgGames: avgGames, dominantPeriod: period });
+    });
+  }());
+
+  // Tag each game row with cycleDay = position within the dominant cycle (0-based)
+  // and a dynamicCycleDay for display ("day X of ~N").
+  var dominantPeriod = kept[0] ? Math.round(kept[0].periodDays) : CYCLE_LENGTH;
+  var gameCycleDays = gameIndices.map(function(gi) {
+    return gi % dominantPeriod;
+  });
+
+  return {
+    dominantCycles: dominantCycles,
+    reconstructed: reconstructed,
+    forecastValues: forecastValues,
+    components: components,
+    N: N,
+    mean: mean,
+    r2: r2,
+    dynamicPhaseConfig: dynamicPhaseConfig,
+    dominantPeriod: dominantPeriod,
+    gameCycleDays: gameCycleDays,
+  };
 }
 
 function buildCycleChartData(gameData, analysis) {
@@ -797,17 +852,20 @@ function applyPhaseColoring(gameData, analysis) {
   var rec  = analysis.reconstructed;
   var mean = analysis.mean;
   var N    = rec.length;
+  var cycleDays   = analysis.gameCycleDays;
+  var dynConfig   = analysis.dynamicPhaseConfig;
   return gameData.map(function(g, i) {
     var prev  = i > 0     ? rec[i - 1] : rec[0];
     var next  = i < N - 1 ? rec[i + 1] : rec[N - 1];
     var slope = (next - prev) / 2;
     var level = rec[i] - mean;
     var ph;
-    if      (level >  0 && slope >  0) ph = PHASE_CONFIG[0]; // Surge:   above mean, rising
-    else if (level >  0 && slope <= 0) ph = PHASE_CONFIG[1]; // Cruise:  above mean, falling
-    else if (level <= 0 && slope <= 0) ph = PHASE_CONFIG[2]; // Slide:   below mean, falling
-    else                               ph = PHASE_CONFIG[3]; // Rebuild: below mean, rising
-    return Object.assign({}, g, { phase: ph.name, phaseColor: ph.color });
+    if      (level >  0 && slope >  0) ph = (dynConfig || PHASE_CONFIG)[0]; // Surge
+    else if (level >  0 && slope <= 0) ph = (dynConfig || PHASE_CONFIG)[1]; // Cruise
+    else if (level <= 0 && slope <= 0) ph = (dynConfig || PHASE_CONFIG)[2]; // Slide
+    else                               ph = (dynConfig || PHASE_CONFIG)[3]; // Rebuild
+    var cycleDay = cycleDays ? cycleDays[i] : (g.cycleDay != null ? g.cycleDay : i % CYCLE_LENGTH);
+    return Object.assign({}, g, { phase: ph.name, phaseColor: ph.color, cycleDay: cycleDay });
   });
 }
 
