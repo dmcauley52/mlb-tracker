@@ -2215,7 +2215,7 @@
                         <span key={h} style={{color:"#475569",fontWeight:700,padding:"2px 4px",borderBottom:"1px solid #1e293b"}}>{h}</span>
                       ))}
                       {indexed.map(p=>{
-                        const lastName=p.name?p.name.split(" ").slice(-1)[0]:"—";
+                        const lastName=p.name||"—";
                         const hotR=p.projR>=0.50, hotRbi=p.projRBI>=0.50;
                         return(
                           <React.Fragment key={p.i}>
