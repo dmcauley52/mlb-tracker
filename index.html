@@ -1722,8 +1722,386 @@
       );
     }
 
+    // ── Monte Carlo Simulation Engine ────────────────────────────────────────
+    const LEAGUE_AVG_K9  = 8.5;
+    const SPOT_PA        = [4.5,4.4,4.3,4.2,4.1,4.0,3.95,3.9,3.8];
+
+    function computePlayerDistribution(games) {
+      let pa=0,hr=0,trip=0,dbl=0,hit=0,bbHbp=0,k=0;
+      for(const g of games){
+        pa    += g.plate_appearances||g.at_bats||0;
+        hr    += g.home_runs||0;
+        trip  += g.triples||0;
+        dbl   += g.doubles||0;
+        hit   += g.hits||0;
+        bbHbp += (g.walks||0)+(g.hit_by_pitch||0);
+        k     += g.strikeouts||0;
+      }
+      if(pa<1) return null;
+      const p1b = Math.max(0,(hit-dbl-trip-hr)/pa);
+      const pBb = bbHbp/pa, pK = k/pa, pHr = hr/pa, pTrip = trip/pa, pDbl = dbl/pa;
+      return {hr:pHr,trip:pTrip,dbl:pDbl,s1b:p1b,bb:pBb,k:pK,
+              out:Math.max(0,1-pHr-pTrip-pDbl-p1b-pBb-pK),
+              paCount:pa,gameCount:games.length};
+    }
+
+    function distributionFromMLBStats(s) {
+      const pa=(s.atBats||0)+(s.baseOnBalls||0)+(s.hitByPitch||0)+(s.sacFlies||0);
+      if(pa<1) return null;
+      const hr=s.homeRuns||0,trip=s.triples||0,dbl=s.doubles||0,hit=s.hits||0;
+      const bbHbp=(s.baseOnBalls||0)+(s.hitByPitch||0),k=s.strikeOuts||0;
+      const p1b=Math.max(0,(hit-dbl-trip-hr)/pa);
+      const pBb=bbHbp/pa,pK=k/pa,pHr=hr/pa,pTrip=trip/pa,pDbl=dbl/pa;
+      return {hr:pHr,trip:pTrip,dbl:pDbl,s1b:p1b,bb:pBb,k:pK,
+              out:Math.max(0,1-pHr-pTrip-pDbl-p1b-pBb-pK),
+              paCount:pa,gameCount:0,fromFallback:true};
+    }
+
+    function applySpAdjustment(dist,sp) {
+      if(!dist||!sp) return dist;
+      const kMult  = Math.min(2.0,Math.max(0.5,(sp.k9||LEAGUE_AVG_K9)/LEAGUE_AVG_K9));
+      const eraAdj = Math.min(1.4,Math.max(0.6,(sp.era||LEAGUE_AVG_ERA)/LEAGUE_AVG_ERA));
+      const newK   = Math.min(0.45,dist.k*kMult);
+      const kDelta = newK-dist.k;
+      const hitSum = dist.hr+dist.trip+dist.dbl+dist.s1b;
+      const hitScale = hitSum>0?Math.max(0,1-kDelta/hitSum):1;
+      const runScale = 1/eraAdj;
+      return {hr:dist.hr*hitScale*runScale,trip:dist.trip*hitScale*runScale,
+              dbl:dist.dbl*hitScale*runScale,s1b:dist.s1b*hitScale*runScale,
+              bb:dist.bb*runScale,k:newK,
+              out:Math.max(0,1-(dist.hr*hitScale*runScale)-(dist.trip*hitScale*runScale)
+                             -(dist.dbl*hitScale*runScale)-(dist.s1b*hitScale*runScale)
+                             -(dist.bb*runScale)-newK),
+              paCount:dist.paCount,gameCount:dist.gameCount,fromFallback:dist.fromFallback};
+    }
+
+    function samplePA(d) {
+      const r=Math.random();
+      let c=d.hr;       if(r<c) return 'hr';
+      c+=d.trip;        if(r<c) return 'trip';
+      c+=d.dbl;         if(r<c) return 'dbl';
+      c+=d.s1b;         if(r<c) return 's1b';
+      c+=d.bb;          if(r<c) return 'bb';
+      c+=d.k;           if(r<c) return 'k';
+      return 'out';
+    }
+
+    function simulateHalfInning(dists,start) {
+      let outs=0,runs=0,b=[false,false,false],bIdx=start;
+      while(outs<3){
+        const out=samplePA(dists[bIdx%9]); bIdx++;
+        if(out==='hr'){runs+=1+b.filter(Boolean).length;b=[false,false,false];}
+        else if(out==='trip'){runs+=b.filter(Boolean).length;b=[false,false,true];}
+        else if(out==='dbl'){runs+=(b[1]?1:0)+(b[2]?1:0);b=[false,false,b[0]];}
+        else if(out==='s1b'){runs+=(b[1]?1:0)+(b[2]?1:0);b=[true,b[0],false];}
+        else if(out==='bb'){
+          if(b[0]&&b[1]&&b[2])runs++;
+          else if(b[0]&&b[1])b=[true,true,true];
+          else if(b[0])b=[true,true,b[2]];
+          else b[0]=true;
+        }else if(out==='k'){outs++;}
+        else{
+          if(b[0]&&outs<2&&Math.random()<0.15){outs+=2;b[0]=false;}
+          else outs++;
+        }
+      }
+      return{runs,nextBatter:bIdx%9};
+    }
+
+    function simulateGame(homeDists,awayDists) {
+      let hR=0,aR=0,hB=0,aB=0;
+      for(let inn=0;inn<9;inn++){
+        const ah=simulateHalfInning(awayDists,aB);aR+=ah.runs;aB=ah.nextBatter;
+        const hh=simulateHalfInning(homeDists,hB);hR+=hh.runs;hB=hh.nextBatter;
+      }
+      return{homeRuns:hR,awayRuns:aR};
+    }
+
+    async function fetchLast30Games(sbUrl,sbKey,playerNames) {
+      if(!playerNames.length||!sbUrl||!sbKey) return {};
+      const since=new Date();since.setDate(since.getDate()-60);
+      const iso=since.toISOString().split("T")[0];
+      const nameParam=`(${playerNames.map(n=>JSON.stringify(n)).join(",")})`;
+      try{
+        const rows=await sbFetch(sbUrl,sbKey,
+          `player_gamelogs?player_name=in.${encodeURIComponent(nameParam)}`+
+          `&game_date=gte.${iso}&order=player_name.asc,game_date.desc`+
+          `&select=player_name,plate_appearances,at_bats,hits,doubles,triples,`+
+          `home_runs,walks,hit_by_pitch,strikeouts,sac_flies,runs,rbi&limit=1000`);
+        const byPlayer={};
+        for(const r of rows){
+          if(!byPlayer[r.player_name])byPlayer[r.player_name]=[];
+          if(byPlayer[r.player_name].length<30)byPlayer[r.player_name].push(r);
+        }
+        return byPlayer;
+      }catch{return{};}
+    }
+
+    async function fetchMLBSeasonStats(mlbId) {
+      try{
+        const r=await fetch(`https://statsapi.mlb.com/api/v1/people/${mlbId}/stats?stats=season&group=hitting&season=2026&gameType=R`);
+        const d=await r.json();
+        return d.stats?.[0]?.splits?.[0]?.stat||null;
+      }catch{return null;}
+    }
+
+    async function fetchOfficialLineup(teamId,gameDate) {
+      try{
+        const r=await fetch(`https://statsapi.mlb.com/api/v1/schedule?sportId=1&teamId=${teamId}&startDate=${gameDate}&endDate=${gameDate}&hydrate=lineups`);
+        const d=await r.json();
+        const game=d.dates?.[0]?.games?.[0];
+        if(!game)return null;
+        const isHome=game.teams.home.team.id===teamId;
+        const lu=game.lineups||{};
+        return{myPlayers:lu[isHome?'homePlayers':'awayPlayers']||[],
+               oppPlayers:lu[isHome?'awayPlayers':'homePlayers']||[],
+               gamePk:game.gamePk,isHome};
+      }catch{return null;}
+    }
+
+    async function buildDistributions(names,gamesMap,sp) {
+      const LEAGUE_AVG={hr:0.033,trip:0.004,dbl:0.047,s1b:0.145,bb:0.084,k:0.220,
+                        out:0.467,paCount:0,gameCount:0,fromFallback:true};
+      const dists=[];
+      for(let i=0;i<9;i++){
+        const name=names[i];let dist=null;
+        if(name&&gamesMap[name]?.length>=10)dist=computePlayerDistribution(gamesMap[name]);
+        if(!dist&&name){
+          const mlbId=MLB_IDS[name]||(typeof window!=='undefined'&&window.MLB_IDS?.[name]);
+          if(mlbId){const stat=await fetchMLBSeasonStats(mlbId);if(stat)dist=distributionFromMLBStats(stat);}
+        }
+        dists.push(sp?applySpAdjustment(dist||LEAGUE_AVG,sp):(dist||LEAGUE_AVG));
+      }
+      return dists;
+    }
+
+    function MonteCarloSimPanel({myTeam,selectedGame,likelyLineup,oppLineup,sbUrl,sbKey}) {
+      const [simPhase,      setSimPhase]      = React.useState("idle");
+      const [officialLineup,setOfficialLineup]= React.useState(null);
+      const [simProgress,   setSimProgress]   = React.useState(0);
+      const [simResult,     setSimResult]     = React.useState(null);
+      const [simError,      setSimError]      = React.useState("");
+      const pollRef   = React.useRef(null);
+      const abortRef  = React.useRef(false);
+      const ACCENT    = "#f472b6";
+
+      // Poll for official lineup once game is within 4 hours
+      React.useEffect(()=>{
+        if(pollRef.current){clearInterval(pollRef.current);pollRef.current=null;}
+        setSimPhase("idle");setOfficialLineup(null);setSimResult(null);setSimError("");
+        if(!selectedGame||!myTeam)return;
+        const gameDate=new Date(Date.now()+selectedGame.dayOffset*86400000);
+        const msUntil=gameDate-Date.now();
+        if(msUntil>4*60*60*1000)return;
+        const teamId=selectedGame.detail?.teamId;
+        const doCheck=async()=>{
+          try{
+            // Need our team's ID — look it up via schedule endpoint
+            const iso=gameDate.toISOString().slice(0,10);
+            // Fetch schedule for the specific game to get home/away team IDs
+            const r=await fetch(`https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate=${iso}&endDate=${iso}&hydrate=lineups,teams&teamId=${selectedGame.detail?.homeTeamId||teamId||''}`);
+            const d=await r.json();
+            // Find our game
+            const allGames=(d.dates||[]).flatMap(dt=>dt.games||[]);
+            const game=allGames.find(g=>
+              g.teams.home.team.name===myTeam||g.teams.away.team.name===myTeam
+            );
+            if(!game){setSimPhase("waiting");return;}
+            const isHome=game.teams.home.team.name===myTeam;
+            const lu=game.lineups||{};
+            const myPlayers=lu[isHome?'homePlayers':'awayPlayers']||[];
+            const oppPlayers=lu[isHome?'awayPlayers':'homePlayers']||[];
+            if(myPlayers.length>0){
+              setOfficialLineup({myPlayers,oppPlayers,gamePk:game.gamePk,isHome});
+              setSimPhase("ready");
+              clearInterval(pollRef.current);pollRef.current=null;
+            }else{setSimPhase("waiting");}
+          }catch{setSimPhase("waiting");}
+        };
+        doCheck();
+        pollRef.current=setInterval(doCheck,60000);
+        return()=>{if(pollRef.current)clearInterval(pollRef.current);};
+      },[selectedGame,myTeam]);
+
+      const runSimulation=React.useCallback(async()=>{
+        setSimPhase("simulating");setSimProgress(0);setSimResult(null);setSimError("");
+        abortRef.current=false;
+        try{
+          const myNames = officialLineup
+            ? officialLineup.myPlayers.map(p=>p.fullName)
+            : Array.from({length:9},(_,i)=>likelyLineup?.[i]?.player?.player_name||null);
+          const oppNames = officialLineup
+            ? officialLineup.oppPlayers.map(p=>p.fullName)
+            : Array.from({length:9},(_,i)=>oppLineup?.[i]?.player?.player_name||null);
+          const sp=selectedGame?.detail?.pitcher||null;
+          const [myGames,oppGames]=await Promise.all([
+            fetchLast30Games(sbUrl,sbKey,myNames.filter(Boolean)),
+            fetchLast30Games(sbUrl,sbKey,oppNames.filter(Boolean)),
+          ]);
+          const [myDists,oppDists]=await Promise.all([
+            buildDistributions(myNames,myGames,sp),
+            buildDistributions(oppNames,oppGames,null),
+          ]);
+          const isHome=officialLineup?.isHome??selectedGame?.detail?.isHome??true;
+          const homeDists=isHome?myDists:oppDists;
+          const awayDists=isHome?oppDists:myDists;
+          const myRunsArr=[],oppRunsArr=[];
+          const TOTAL=10000,CHUNK=500;
+          let done=0;
+          await new Promise(resolve=>{
+            function chunk(){
+              if(abortRef.current){resolve();return;}
+              const end=Math.min(done+CHUNK,TOTAL);
+              for(let i=done;i<end;i++){
+                const{homeRuns,awayRuns}=simulateGame(homeDists,awayDists);
+                myRunsArr.push(isHome?homeRuns:awayRuns);
+                oppRunsArr.push(isHome?awayRuns:homeRuns);
+              }
+              done=end;setSimProgress(Math.round(done/TOTAL*100));
+              if(done<TOTAL)setTimeout(chunk,0);else resolve();
+            }
+            setTimeout(chunk,0);
+          });
+          if(abortRef.current)return;
+          myRunsArr.sort((a,b)=>a-b);oppRunsArr.sort((a,b)=>a-b);
+          const pct=(arr,p)=>arr[Math.floor(arr.length*p)];
+          const myWins=myRunsArr.filter((_,i)=>myRunsArr[i]>oppRunsArr[i]).length;
+          // Per-player projections from distributions × estimated PAs per spot
+          const playerRows=myDists.map((d,i)=>{
+            const pa=SPOT_PA[i]||4.0;
+            return{
+              projH:+((d.s1b+d.dbl+d.trip+d.hr)*pa).toFixed(2),
+              projHR:+(d.hr*pa).toFixed(2),
+              projBB:+(d.bb*pa).toFixed(2),
+            };
+          });
+          const hasData=myNames.filter(n=>n&&myGames[n]?.length>=10).length;
+          setSimResult({
+            myMedian:pct(myRunsArr,0.5),myP10:pct(myRunsArr,0.1),myP90:pct(myRunsArr,0.9),
+            oppMedian:pct(oppRunsArr,0.5),oppP10:pct(oppRunsArr,0.1),oppP90:pct(oppRunsArr,0.9),
+            winProb:+(myWins/TOTAL).toFixed(3),
+            playerRows,playerNames:myNames,
+            confidence:Math.round((hasData/Math.min(9,myNames.filter(Boolean).length))*100)||0,
+            usingOfficial:!!officialLineup,
+          });
+          setSimPhase("done");
+        }catch(e){setSimError(e.message||"Simulation failed");setSimPhase("ready");}
+      },[officialLineup,likelyLineup,oppLineup,selectedGame,sbUrl,sbKey,myTeam]);
+
+      if(!selectedGame)return null;
+
+      const oppName=selectedGame.opponent||"Opponent";
+      const confColor=c=>c>=70?"#22c55e":c>=40?"#f59e0b":"#ef4444";
+
+      return(
+        <div style={{background:"#1e293b",borderRadius:12,padding:16,marginTop:16}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+            <div>
+              <span style={{fontWeight:700,fontSize:13,color:ACCENT}}>Monte Carlo Box Score</span>
+              <span style={{fontSize:11,color:"#475569",marginLeft:8}}>10,000-game simulation</span>
+            </div>
+            {simPhase==="idle"&&(
+              <span style={{fontSize:11,color:"#475569"}}>Available ~4h before first pitch</span>
+            )}
+            {simPhase==="waiting"&&(
+              <span style={{fontSize:11,color:"#f59e0b"}}>Waiting for official lineup… (checking every 60s)</span>
+            )}
+            {(simPhase==="ready"||simPhase==="done")&&(
+              <button onClick={runSimulation}
+                style={{padding:"7px 16px",borderRadius:8,border:"none",cursor:"pointer",
+                  fontWeight:700,fontSize:12,
+                  background:simPhase==="done"?"#334155":ACCENT,
+                  color:simPhase==="done"?"#94a3b8":"#fff"}}>
+                {simPhase==="done"?"Re-run ▶":"Run Simulation ▶"}
+              </button>
+            )}
+            {simPhase==="simulating"&&(
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <div style={{width:120,height:6,background:"#0f172a",borderRadius:3,overflow:"hidden"}}>
+                  <div style={{width:simProgress+"%",height:"100%",background:ACCENT,borderRadius:3,transition:"width 0.15s"}}/>
+                </div>
+                <span style={{fontSize:11,color:"#94a3b8"}}>{simProgress}%</span>
+              </div>
+            )}
+          </div>
+
+          {officialLineup&&(
+            <div style={{fontSize:10,color:"#22c55e",marginBottom:8}}>
+              Official lineup confirmed · {officialLineup.myPlayers.length} batters · {officialLineup.isHome?"Home":"Away"}
+            </div>
+          )}
+          {!officialLineup&&simPhase!=="idle"&&simPhase!=="waiting"&&(
+            <div style={{fontSize:10,color:"#f59e0b",marginBottom:8}}>
+              Using projected lineup (official card not yet posted)
+            </div>
+          )}
+          {simError&&<div style={{color:"#ef4444",fontSize:12,marginBottom:8}}>{simError}</div>}
+
+          {simResult&&(
+            <>
+              {/* Score prediction */}
+              <div style={{background:"#0f172a",borderRadius:8,padding:"14px 16px",marginBottom:12}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:24,marginBottom:10}}>
+                  <div style={{textAlign:"center"}}>
+                    <div style={{fontSize:11,color:"#64748b",marginBottom:2}}>{myTeam}</div>
+                    <div style={{fontSize:32,fontWeight:800,color:"#22c55e",lineHeight:1}}>{simResult.myMedian}</div>
+                    <div style={{fontSize:10,color:"#475569",marginTop:2}}>{simResult.myP10}–{simResult.myP90} range</div>
+                  </div>
+                  <div style={{fontSize:22,color:"#334155",fontWeight:700}}>—</div>
+                  <div style={{textAlign:"center"}}>
+                    <div style={{fontSize:11,color:"#64748b",marginBottom:2}}>{oppName}</div>
+                    <div style={{fontSize:32,fontWeight:800,color:"#ef4444",lineHeight:1}}>{simResult.oppMedian}</div>
+                    <div style={{fontSize:10,color:"#475569",marginTop:2}}>{simResult.oppP10}–{simResult.oppP90} range</div>
+                  </div>
+                </div>
+                <div style={{height:8,background:"#1e293b",borderRadius:4,overflow:"hidden",marginBottom:4}}>
+                  <div style={{width:(simResult.winProb*100)+"%",height:"100%",background:"#22c55e",transition:"width 0.4s"}}/>
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:10}}>
+                  <span style={{color:"#22c55e",fontWeight:700}}>{Math.round(simResult.winProb*100)}% {myTeam}</span>
+                  <span style={{color:"#ef4444",fontWeight:700}}>{Math.round((1-simResult.winProb)*100)}% {oppName}</span>
+                </div>
+              </div>
+
+              {/* Player projections table */}
+              <div style={{background:"#0f172a",borderRadius:8,padding:"10px 12px",marginBottom:10}}>
+                <div style={{fontSize:10,fontWeight:700,color:ACCENT,marginBottom:8,textTransform:"uppercase",letterSpacing:0.8}}>
+                  Projected Lineup Box Score
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 36px 44px 44px 44px",gap:"1px 0",fontSize:11}}>
+                  {["Batter","#","H","HR","BB"].map(h=>(
+                    <span key={h} style={{color:"#475569",fontWeight:700,padding:"2px 6px",borderBottom:"1px solid #1e293b"}}>{h}</span>
+                  ))}
+                  {simResult.playerRows.map((p,i)=>{
+                    const name=simResult.playerNames[i];
+                    const lastName=name?name.split(" ").slice(-1)[0]:"—";
+                    return(
+                      <React.Fragment key={i}>
+                        <span style={{color:"#e2e8f0",padding:"4px 6px",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{lastName}</span>
+                        <span style={{color:"#475569",padding:"4px 6px",textAlign:"center"}}>{i+1}</span>
+                        <span style={{color:"#94a3b8",padding:"4px 6px",textAlign:"center"}}>{p.projH}</span>
+                        <span style={{color:p.projHR>=0.10?"#f59e0b":"#64748b",padding:"4px 6px",textAlign:"center",fontWeight:p.projHR>=0.10?700:400}}>{p.projHR}</span>
+                        <span style={{color:"#64748b",padding:"4px 6px",textAlign:"center"}}>{p.projBB}</span>
+                      </React.Fragment>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Confidence */}
+              <div style={{fontSize:10,color:"#475569",display:"flex",gap:12,flexWrap:"wrap"}}>
+                <span>Confidence: <span style={{color:confColor(simResult.confidence),fontWeight:700}}>{simResult.confidence}%</span></span>
+                <span>{simResult.usingOfficial?"Official lineup":"Projected lineup"}</span>
+                <span style={{color:"#334155"}}>RBI/R require full tally mode (v2)</span>
+              </div>
+            </>
+          )}
+        </div>
+      );
+    }
+
     // ── Game Plan Tab ─────────────────────────────────────────────────────────
-    function GamePlanTab({roster, predCache, dataSource}) {
+    function GamePlanTab({roster, predCache, dataSource, sbUrl, sbKey}) {
       const [myTeam,       setMyTeam]       = React.useState(readMeta("default-team")||"");
       const [schedule,     setSchedule]     = React.useState(null);
       const [schedLoading, setSchedLoading] = React.useState(false);
