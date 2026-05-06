@@ -2881,7 +2881,11 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
           const fSlope = fv[fv.length-1] - fv[0];
           const fDir = fSlope > 0.015 ? "strongly rising" : fSlope > 0.005 ? "rising" : fSlope < -0.015 ? "strongly falling" : fSlope < -0.005 ? "falling" : "flat";
           const fAvg = (fv.reduce((a,b)=>a+b,0)/fv.length + cycleAnalysis.mean).toFixed(3);
-          cycleSection=`Detected performance cycles (DFT analysis, R²=${cycleAnalysis.r2.toFixed(2)}):\n${cycles}\nForecast next 7 games: trend is ${fDir}, projected avg ~${fAvg}`;
+          const phaseDesc = cycleAnalysis.dynamicPhaseConfig
+            ? `Dynamic phases (${cycleAnalysis.dominantPeriod}-game cycle): `+cycleAnalysis.dynamicPhaseConfig.map(p=>`${p.name} ~${p.avgGames}g`).join(", ")
+            : "";
+          const currentPhaseNote = `Currently in ${currentPhase?.name} phase (day ${currentCycleDay+1}/${cycleAnalysis.dominantPeriod})`;
+          cycleSection=`Detected performance cycles (DFT analysis, R²=${cycleAnalysis.r2.toFixed(2)}):\n${cycles}\n${phaseDesc}\n${currentPhaseNote}\nForecast next 7 games: trend is ${fDir}, projected avg ~${fAvg}`;
         } else {
           const ps=activePhaseConfig.map(p=>`  ${p.name}: AVG ${phaseAvg(gameData,p.name,"avg")}, OPS ${phaseAvg(gameData,p.name,"ops")}`).join("\n");
           cycleSection=`Fixed 28-day cycle phase averages (insufficient data for DFT):\n${ps}\nCurrent: ${currentPhase?.name} phase, day ${currentCycleDay+1}/${CYCLE_LENGTH}`;
