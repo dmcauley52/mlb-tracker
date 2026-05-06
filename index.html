@@ -2291,6 +2291,7 @@
       const [likelyLineup,   setLikelyLineup]   = React.useState(null);
       const [oppLineup,      setOppLineup]      = React.useState(null);
       const [confirmedLineup,setConfirmedLineup]= React.useState(null); // official MLB lineup when posted
+      const confirmedGamePkRef = React.useRef(null); // tracks which gamePk has an official lineup (sync, no state delay)
       const [aiSummary,    setAiSummary]    = React.useState("");
       const [aiLoading,    setAiLoading]    = React.useState(false);
       const [btResult,     setBtResult]     = React.useState(null);
