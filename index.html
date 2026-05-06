@@ -2074,7 +2074,8 @@
             playerRows:makeRows(myDists,myRSum,myRbiSum),playerNames:myNames,
             oppRows:makeRows(oppDists,oppRSum,oppRbiSum),oppNames,
             myInnMedians,oppInnMedians,
-            confidence:Math.round((hasData/Math.min(9,myNames.filter(Boolean).length))*100)||0,
+            hasDB, hasAPI, hasLeague,
+            myCoverage, oppCoverage,
             usingOfficial:!!officialLineup,
           });
           setSimPhase("done");
