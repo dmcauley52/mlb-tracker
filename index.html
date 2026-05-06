@@ -3254,7 +3254,6 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
           setPredCache(prev=>({...prev,[selectedPlayer.player_name]:pred}));
         }catch(e){
           setDataError(e.message);
-          setGameData(genDemo(selectedPlayer.player_name,1.5));
         }
         setDataLoading(false);
       },[selectedPlayer,dataSource,sbUrl,sbKey]);
