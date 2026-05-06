@@ -1961,9 +1961,11 @@
             const myPlayers=lu[isHome?'homePlayers':'awayPlayers']||[];
             const oppPlayers=lu[isHome?'awayPlayers':'homePlayers']||[];
             if(myPlayers.length>0){
-              setOfficialLineup({myPlayers,oppPlayers,gamePk:game.gamePk,isHome});
+              const confirmed={myPlayers,oppPlayers,gamePk:game.gamePk,isHome};
+              setOfficialLineup(confirmed);
               setSimPhase("ready");
               clearInterval(pollRef.current);pollRef.current=null;
+              if(onOfficialLineup) onOfficialLineup(confirmed);
             }else{setSimPhase("waiting");}
           }catch{setSimPhase("waiting");}
         };
