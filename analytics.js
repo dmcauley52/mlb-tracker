@@ -4,9 +4,9 @@
 // ── Constants ──────────────────────────────────────────────────────────────
 var CYCLE_LENGTH    = 28;
 var FORECAST_DAYS   = 14;
-var MAX_COMPONENTS  = 5;
-var MIN_PERIOD      = 4;
-var MIN_AMPLITUDE   = 0.005;
+var MAX_COMPONENTS  = 10;
+var MIN_PERIOD      = 3;
+var MIN_AMPLITUDE   = 0.001;
 
 // 2024-2026 FanGraphs wOBA weights
 var WOBA_WEIGHTS = { bb:0.690, hbp:0.722, single:0.888, double:1.271, triple:1.616, hr:2.101 };
