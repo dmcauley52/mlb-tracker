@@ -1014,10 +1014,10 @@ function buildOpponentLineup(players, predCache) {
 // ── Game Plan Backtesting ──────────────────────────────────────────────────
 // Weights for the run-prediction model (tunable)
 var BACKTEST_WEIGHTS = {
-  wobaRunScale:    17.0,  // predicted runs = avg_lineup_woba * wobaRunScale (lowered from 18.5)
-  maxPredictedRuns: 7.5,  // cap prevents 9-10R predictions that always flip to Win
+  wobaRunScale:    14.1,  // avg lineup wOBA * scale = predicted runs; calibrated to MLB avg 4.40 R/G at wOBA 0.312
+  maxPredictedRuns: 9.0,  // realistic cap — big offensive games reach 8-9 R
   scoreBoost:      0.08,  // fractional bonus from avg prediction score (0–99)
-  oppEraScale:     0.75,  // era factor weight — raised from 0.55 so elite/bad starters matter more
+  oppEraScale:     0.75,  // era factor weight
   winMarginThresh: 0.35,  // run-diff threshold below which we call it a toss-up
   // Batting order PA weights (spots 1-9): top of order sees more PAs per game
   spotWeights:     [1.15, 1.12, 1.10, 1.05, 1.02, 0.95, 0.90, 0.88, 0.83],
@@ -1183,7 +1183,7 @@ function _predictGame(lineupWobas, lineupScores, oppEra, oppWinPct, oppLineupWob
   );
 
   // Opponent run estimate — also scaled by park factor
-  var oppRunsWinPct = 4.65 + (oppWinPct - 0.500) * 13.0;
+  var oppRunsWinPct = 4.40 + (oppWinPct - 0.500) * 13.0;
   var oppRunsEst = (oppLineupWoba != null && oppLineupWoba > 0)
     ? (oppLineupWoba * w.wobaRunScale * 0.6 + oppRunsWinPct * 0.4) * parkFactor
     : oppRunsWinPct * parkFactor;
