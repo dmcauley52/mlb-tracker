@@ -1897,20 +1897,31 @@
     }
 
     // idMap: optional {playerName -> mlbId} for players not in MLB_IDS hardcoded list
+    // Returns {dists, coverage} where coverage is array of {name, source} per slot
     async function buildDistributions(names, gamesMap, sp, idMap={}) {
       const LEAGUE_AVG={hr:0.033,trip:0.004,dbl:0.047,s1b:0.145,bb:0.084,k:0.220,
                         out:0.467,paCount:0,gameCount:0,fromFallback:true};
-      const dists=[];
+      const dists=[], coverage=[];
       for(let i=0;i<9;i++){
-        const name=names[i]; let dist=null;
-        if(name&&gamesMap[name]?.length>=10) dist=computePlayerDistribution(gamesMap[name]);
+        const name=names[i]; let dist=null, source='league-avg';
+        if(name&&gamesMap[name]?.length>=10){
+          dist=computePlayerDistribution(gamesMap[name]);
+          source=`db(${gamesMap[name].length}g)`;
+        }
         if(!dist&&name){
           const mlbId=MLB_IDS[name]||idMap[name];
-          if(mlbId){const stat=await fetchMLBSeasonStats(mlbId);if(stat)dist=distributionFromMLBStats(stat);}
+          if(mlbId){
+            const stat=await fetchMLBSeasonStats(mlbId);
+            if(stat){dist=distributionFromMLBStats(stat); source='mlb-api';}
+            else source='mlb-api-fail';
+          } else {
+            source='no-id';
+          }
         }
+        coverage.push({name:name||'—', source});
         dists.push(sp?applySpAdjustment(dist||LEAGUE_AVG,sp):(dist||LEAGUE_AVG));
       }
-      return dists;
+      return {dists, coverage};
     }
 
     function MonteCarloSimPanel({myTeam,selectedGame,likelyLineup,oppLineup,sbUrl,sbKey}) {
