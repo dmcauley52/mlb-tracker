@@ -1993,10 +1993,10 @@
           const myWins=myRunsArr.filter((r,i)=>r>oppRunsArr[i]).length;
           myRunsArr.sort((a,b)=>a-b);oppRunsArr.sort((a,b)=>a-b);
           const pct=(arr,p)=>arr[Math.floor(arr.length*p)];
-          // Per-inning medians and most-common value (mode)
-          const innMedian=arr=>{const s=[...arr].sort((a,b)=>a-b);return s[Math.floor(s.length/2)];};
-          const myInnMedians=myInnArr.map(innMedian);
-          const oppInnMedians=oppInnArr.map(innMedian);
+          // Per-inning means (median is almost always 0 — most innings scoreless)
+          const innMean=arr=>+(arr.reduce((a,b)=>a+b,0)/arr.length).toFixed(2);
+          const myInnMedians=myInnArr.map(innMean);
+          const oppInnMedians=oppInnArr.map(innMean);
           // Per-player projections from distributions × estimated PAs per spot
           const makeRows=(dists)=>dists.map((d,i)=>{
             const pa=SPOT_PA[i]||4.0;
