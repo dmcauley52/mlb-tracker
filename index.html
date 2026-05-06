@@ -1971,14 +1971,22 @@
           const oppNames = officialLineup
             ? officialLineup.oppPlayers.map(p=>p.fullName)
             : Array.from({length:9},(_,i)=>oppLineup?.[i]?.player?.player_name||null);
+          // Build name→id maps from official lineup so any player not in MLB_IDS
+          // still gets real season stats as fallback instead of league average
+          const myIdMap = officialLineup
+            ? Object.fromEntries(officialLineup.myPlayers.map(p=>[p.fullName,p.id]))
+            : {};
+          const oppIdMap = officialLineup
+            ? Object.fromEntries(officialLineup.oppPlayers.map(p=>[p.fullName,p.id]))
+            : {};
           const sp=selectedGame?.detail?.pitcher||null;
           const [myGames,oppGames]=await Promise.all([
             fetchLast30Games(sbUrl,sbKey,myNames.filter(Boolean)),
             fetchLast30Games(sbUrl,sbKey,oppNames.filter(Boolean)),
           ]);
           const [myDists,oppDists]=await Promise.all([
-            buildDistributions(myNames,myGames,sp),
-            buildDistributions(oppNames,oppGames,null),
+            buildDistributions(myNames,myGames,sp,myIdMap),
+            buildDistributions(oppNames,oppGames,null,oppIdMap),
           ]);
           const isHome=officialLineup?.isHome??selectedGame?.detail?.isHome??true;
           const homeDists=isHome?myDists:oppDists;
