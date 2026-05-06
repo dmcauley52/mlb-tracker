@@ -2323,11 +2323,11 @@
 
       React.useEffect(()=>{
         if(!selectedGame||!myTeam) return;
+        setConfirmedLineup(null); // clear confirmed lineup when game changes
         const oppFull = selectedGame.detail?.teamFullName;
         const myPool = roster.filter(p=>p.team===myTeam&&(p.gamesPlayed||0)>=5)
           .sort((a,b)=>(predCache[b.player_name]?.score||0)-(predCache[a.player_name]?.score||0)).slice(0,14);
         setMyLineup(buildOptimalLineup(myPool, predCache));
-        // Likely lineup: sorted by historical batting spot (same as opponent method)
         setLikelyLineup(buildOpponentLineup(myPool, predCache));
         if(oppFull){
           const oppPool = roster.filter(p=>p.team===oppFull&&(p.gamesPlayed||0)>=5)
