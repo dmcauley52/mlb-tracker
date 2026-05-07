@@ -1,59 +1,85 @@
 const GAMMA_URL = "https://gamma-api.polymarket.com";
 const CLOB_URL  = "https://clob.polymarket.com";
 
-// MLB team name fragments used to match Polymarket market questions
-// Polymarket uses full city+nickname, e.g. "Will the New York Yankees win..."
-const TEAM_KEYWORDS = {
-  "Arizona Diamondbacks":  ["diamondbacks", "arizona"],
-  "Atlanta Braves":        ["braves", "atlanta"],
-  "Baltimore Orioles":     ["orioles", "baltimore"],
-  "Boston Red Sox":        ["red sox", "boston"],
-  "Chicago Cubs":          ["cubs", "chicago cubs"],
-  "Chicago White Sox":     ["white sox", "chicago white"],
-  "Cincinnati Reds":       ["reds", "cincinnati"],
-  "Cleveland Guardians":   ["guardians", "cleveland"],
-  "Colorado Rockies":      ["rockies", "colorado"],
-  "Detroit Tigers":        ["tigers", "detroit"],
-  "Houston Astros":        ["astros", "houston"],
-  "Kansas City Royals":    ["royals", "kansas city"],
-  "Los Angeles Angels":    ["angels", "los angeles angels", "l.a. angels"],
-  "Los Angeles Dodgers":   ["dodgers", "los angeles dodgers", "l.a. dodgers"],
-  "Miami Marlins":         ["marlins", "miami"],
-  "Milwaukee Brewers":     ["brewers", "milwaukee"],
-  "Minnesota Twins":       ["twins", "minnesota"],
-  "New York Mets":         ["mets", "new york mets", "ny mets"],
-  "New York Yankees":      ["yankees", "new york yankees", "ny yankees"],
-  "Athletics":             ["athletics", "oakland"],
-  "Philadelphia Phillies": ["phillies", "philadelphia"],
-  "Pittsburgh Pirates":    ["pirates", "pittsburgh"],
-  "San Diego Padres":      ["padres", "san diego"],
-  "San Francisco Giants":  ["giants", "san francisco"],
-  "Seattle Mariners":      ["mariners", "seattle"],
-  "St. Louis Cardinals":   ["cardinals", "st. louis", "saint louis"],
-  "Tampa Bay Rays":        ["rays", "tampa bay"],
-  "Texas Rangers":         ["rangers", "texas"],
-  "Toronto Blue Jays":     ["blue jays", "toronto"],
-  "Washington Nationals":  ["nationals", "washington"],
+// Polymarket game markets use exact full team names: "Pittsburgh Pirates vs. San Francisco Giants"
+// These are the canonical names as they appear on Polymarket (away vs. home)
+const TEAM_NAMES = {
+  "Arizona Diamondbacks":  "Arizona Diamondbacks",
+  "Atlanta Braves":        "Atlanta Braves",
+  "Baltimore Orioles":     "Baltimore Orioles",
+  "Boston Red Sox":        "Boston Red Sox",
+  "Chicago Cubs":          "Chicago Cubs",
+  "Chicago White Sox":     "Chicago White Sox",
+  "Cincinnati Reds":       "Cincinnati Reds",
+  "Cleveland Guardians":   "Cleveland Guardians",
+  "Colorado Rockies":      "Colorado Rockies",
+  "Detroit Tigers":        "Detroit Tigers",
+  "Houston Astros":        "Houston Astros",
+  "Kansas City Royals":    "Kansas City Royals",
+  "Los Angeles Angels":    "Los Angeles Angels",
+  "Los Angeles Dodgers":   "Los Angeles Dodgers",
+  "Miami Marlins":         "Miami Marlins",
+  "Milwaukee Brewers":     "Milwaukee Brewers",
+  "Minnesota Twins":       "Minnesota Twins",
+  "New York Mets":         "New York Mets",
+  "New York Yankees":      "New York Yankees",
+  "Athletics":             "Athletics",
+  "Philadelphia Phillies": "Philadelphia Phillies",
+  "Pittsburgh Pirates":    "Pittsburgh Pirates",
+  "San Diego Padres":      "San Diego Padres",
+  "San Francisco Giants":  "San Francisco Giants",
+  "Seattle Mariners":      "Seattle Mariners",
+  "St. Louis Cardinals":   "St. Louis Cardinals",
+  "Tampa Bay Rays":        "Tampa Bay Rays",
+  "Texas Rangers":         "Texas Rangers",
+  "Toronto Blue Jays":     "Toronto Blue Jays",
+  "Washington Nationals":  "Washington Nationals",
 };
-
-function teamKeywords(teamName) {
-  return TEAM_KEYWORDS[teamName] || [teamName.toLowerCase()];
-}
-
-// Returns true if the question text mentions both teams
-function questionMatchesGame(question, homeTeam, awayTeam) {
-  const q = question.toLowerCase();
-  const homeKws = teamKeywords(homeTeam);
-  const awayKws = teamKeywords(awayTeam);
-  return homeKws.some(k => q.includes(k)) && awayKws.some(k => q.includes(k));
-}
 
 // Fetch mid-price for a CLOB token (0–1 probability)
 async function getMidPrice(tokenId) {
-  const r = await fetch(`${CLOB_URL}/midpoint?token_id=${tokenId}`);
-  if (!r.ok) return null;
-  const d = await r.json();
-  return d.mid != null ? parseFloat(d.mid) : null;
+  try {
+    const r = await fetch(`${CLOB_URL}/midpoint?token_id=${tokenId}`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    return d.mid != null ? parseFloat(d.mid) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Search Gamma API for a specific game market using team name as keyword
+// Returns matching market or null
+async function findGameMarket(homeTeam, awayTeam) {
+  const homeName = TEAM_NAMES[homeTeam] || homeTeam;
+  const awayName = TEAM_NAMES[awayTeam] || awayTeam;
+
+  // Polymarket format: "[Away] vs. [Home]" — search by the home team name
+  // (shorter/more distinctive keyword reduces false positives)
+  const query = encodeURIComponent(homeName);
+  try {
+    const r = await fetch(
+      `${GAMMA_URL}/markets?q=${query}&active=true&closed=false&limit=20`
+    );
+    if (!r.ok) return null;
+    const markets = await r.json();
+    if (!Array.isArray(markets)) return null;
+
+    // Find exact game market: question must contain both full team names
+    // and have binary outcomes (not Yes/No season markets)
+    return markets.find(m => {
+      const q = (m.question || "").toLowerCase();
+      if (!q.includes(homeName.toLowerCase())) return false;
+      if (!q.includes(awayName.toLowerCase())) return false;
+      // Exclude season-long Yes/No markets — game markets have team names as outcomes
+      const outcomes = typeof m.outcomes === "string"
+        ? JSON.parse(m.outcomes) : (m.outcomes || []);
+      return outcomes.length === 2
+        && !outcomes.some(o => o === "Yes" || o === "No");
+    }) || null;
+  } catch {
+    return null;
+  }
 }
 
 export default async function handler(req, res) {
@@ -71,32 +97,15 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Bad request: " + e.message });
   }
 
-  // Fetch open MLB markets from Gamma API — tag_id 100381 = Baseball
-  // Fetch enough to cover a full day's slate (30 teams = up to 15 games)
-  let markets = [];
-  try {
-    const r = await fetch(
-      `${GAMMA_URL}/markets?tag_id=100381&active=true&closed=false&limit=50&order=volume`
-    );
-    if (!r.ok) throw new Error(`Gamma API ${r.status}`);
-    markets = await r.json();
-    if (!Array.isArray(markets)) markets = [];
-  } catch (e) {
-    return res.status(502).json({ error: "Polymarket fetch failed: " + e.message });
-  }
-
   const results = {};
 
-  for (const game of games) {
+  // Search for each game individually — parallel fetches, one per game
+  await Promise.all(games.map(async (game) => {
     const { gamePk, homeTeam, awayTeam } = game;
-    if (!homeTeam || !awayTeam) continue;
+    if (!homeTeam || !awayTeam) return;
 
-    // Find market whose question mentions both teams
-    const market = markets.find(m => {
-      const q = m.question || m.title || "";
-      return questionMatchesGame(q, homeTeam, awayTeam);
-    });
-    if (!market) continue;
+    const market = await findGameMarket(homeTeam, awayTeam);
+    if (!market) return;
 
     // Parse stringified arrays from Gamma API
     let outcomes, prices, tokenIds;
@@ -108,52 +117,45 @@ export default async function handler(req, res) {
       tokenIds = typeof market.clobTokenIds === "string"
         ? JSON.parse(market.clobTokenIds) : (market.clobTokenIds || []);
     } catch {
-      continue;
+      return;
     }
 
-    if (outcomes.length < 2 || tokenIds.length < 2) continue;
+    if (outcomes.length < 2 || tokenIds.length < 2) return;
 
-    // Match outcome index to home/away team
-    const homeKws = teamKeywords(homeTeam);
-    const awayKws = teamKeywords(awayTeam);
-    let homeIdx = outcomes.findIndex(o => homeKws.some(k => o.toLowerCase().includes(k)));
-    let awayIdx = outcomes.findIndex(o => awayKws.some(k => o.toLowerCase().includes(k)));
-
-    // Fallback: assume [0]=home, [1]=away if matching fails
+    // Match outcome index to home/away by exact name
+    const homeName = (TEAM_NAMES[homeTeam] || homeTeam).toLowerCase();
+    const awayName = (TEAM_NAMES[awayTeam] || awayTeam).toLowerCase();
+    let homeIdx = outcomes.findIndex(o => o.toLowerCase().includes(homeName) || homeName.includes(o.toLowerCase()));
+    let awayIdx = outcomes.findIndex(o => o.toLowerCase().includes(awayName) || awayName.includes(o.toLowerCase()));
     if (homeIdx === -1) homeIdx = 0;
     if (awayIdx === -1) awayIdx = 1;
     if (homeIdx === awayIdx) awayIdx = homeIdx === 0 ? 1 : 0;
 
-    // Try to get live mid-prices from CLOB; fall back to outcomePrices from Gamma
-    const homeTokenId = tokenIds[homeIdx];
-    const awayTokenId = tokenIds[awayIdx];
-    let homeWinProb = homeTokenId ? await getMidPrice(homeTokenId) : null;
-    let awayWinProb = awayTokenId ? await getMidPrice(awayTokenId) : null;
-
-    // Fall back to Gamma's cached outcomePrices if CLOB mid unavailable
-    if (homeWinProb == null && prices[homeIdx] != null) {
-      homeWinProb = parseFloat(prices[homeIdx]);
-    }
-    if (awayWinProb == null && prices[awayIdx] != null) {
-      awayWinProb = parseFloat(prices[awayIdx]);
-    }
-    if (homeWinProb == null) continue;
+    // Try live CLOB mid-prices; fall back to Gamma's cached outcomePrices
+    const [homeMid, awayMid] = await Promise.all([
+      getMidPrice(tokenIds[homeIdx]),
+      getMidPrice(tokenIds[awayIdx]),
+    ]);
+    let homeWinProb = homeMid ?? (prices[homeIdx] != null ? parseFloat(prices[homeIdx]) : null);
+    let awayWinProb = awayMid ?? (prices[awayIdx] != null ? parseFloat(prices[awayIdx]) : null);
+    if (homeWinProb == null) return;
+    if (awayWinProb == null) awayWinProb = 1 - homeWinProb;
 
     // Normalise so they sum to 1 (remove vig)
-    const total = (homeWinProb ?? 0) + (awayWinProb ?? (1 - homeWinProb));
+    const total = homeWinProb + awayWinProb;
     if (total > 0) {
       homeWinProb = +(homeWinProb / total).toFixed(3);
       awayWinProb = +(1 - homeWinProb).toFixed(3);
     }
 
     results[gamePk] = {
-      question: market.question || market.title,
+      question:  market.question || market.title,
       homeWinProb,
       awayWinProb,
-      volume:   parseFloat(market.volume) || null,
+      volume:    parseFloat(market.volume) || null,
       liquidity: parseFloat(market.liquidity) || null,
     };
-  }
+  }));
 
   return res.status(200).json({ odds: results });
 }
