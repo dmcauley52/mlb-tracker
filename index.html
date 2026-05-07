@@ -585,8 +585,10 @@
         ? +(modelHomeProb - kalshiHomeProb).toFixed(3) : null;
       const vegasGap = (vegasHomeP != null && modelHomeProb != null)
         ? +(modelHomeProb - vegasHomeP).toFixed(3) : null;
-      // Use whichever gap is available; Kalshi preferred
-      const bestGap = homeGap ?? vegasGap;
+      const polyGap = (polymarketHomeProb != null && modelHomeProb != null)
+        ? +(modelHomeProb - polymarketHomeProb).toFixed(3) : null;
+      // Use highest-volume market available: Kalshi > Polymarket > Vegas
+      const bestGap = homeGap ?? polyGap ?? vegasGap;
 
       // favoredGap: gap in the direction of the model's favorite
       // Positive = model thinks favorite is underpriced (value bet)
