@@ -977,8 +977,9 @@
       const [loading,    setLoading]    = React.useState(true);
       const [error,      setError]      = React.useState(null);
       const [lastFetch,  setLastFetch]  = React.useState(null);
-      const [kalshiOdds, setKalshiOdds] = React.useState({});
-      const [tracker,    setTracker]    = React.useState([]);
+      const [kalshiOdds,     setKalshiOdds]     = React.useState({});
+      const [polymarketOdds, setPolymarketOdds] = React.useState({});
+      const [tracker,        setTracker]        = React.useState([]);
 
       // Keep a ref to latest roster/predCache so load() doesn't re-fire when batch updates predCache
       const rosterRef   = React.useRef(roster);
