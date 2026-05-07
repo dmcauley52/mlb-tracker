@@ -825,6 +825,12 @@
               fav: kalshiFav, agrees: kalshiFav === modelFav,
               live: isLive,
             });
+            // Polymarket row
+            if (polymarket && polymarketHomeProb != null) sigRows.push({
+              label:'Poly', labelColor:'#a855f7',
+              awayPct: polymarketAwayProb, homePct: polymarketHomeProb,
+              fav: polymarketFav, agrees: polymarketFav === modelFav,
+            });
 
             const filledDots = agreeCount;
             const totalDots  = Math.max(signalCount, 1);
