@@ -517,7 +517,7 @@
 
     // ── Today's Matchups Tab ─────────────────────────────────────────────────
     // Extracted game card so useState (lineup toggle) is legal inside .map()
-    function MatchupCard({g, roster, predCache, fmtTime, fmtPct, winColor, mismatchColor, spLabel, kalshi, vegas}) {
+    function MatchupCard({g, roster, predCache, fmtTime, fmtPct, winColor, mismatchColor, spLabel, kalshi, vegas, polymarket}) {
       const [showLineups,   setShowLineups]   = React.useState(false);
       const [lineups,       setLineups]       = React.useState(null);
       const [badgeHovered,  setBadgeHovered]  = React.useState(false);
