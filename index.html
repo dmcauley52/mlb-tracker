@@ -560,13 +560,18 @@
       // Kalshi favorite from implied probs
       const kalshiFav  = kalshiHomeProb != null
         ? (kalshiHomeProb >= 0.5 ? 'home' : 'away') : null;
+      const polymarketHomeProb = polymarket?.homeWinProb ?? null;
+      const polymarketAwayProb = polymarket?.awayWinProb ?? null;
+      const polymarketFav = polymarketHomeProb != null
+        ? (polymarketHomeProb >= 0.5 ? 'home' : 'away') : null;
 
       // Signals that exist (have data) and their agreement with modelFav
       const signals = [
-        { key: 'Model',     fav: modelFav,  always: true },
-        { key: 'Cycle',     fav: ceFav,     always: false },
-        { key: 'Vegas',     fav: vegasFav,  always: false },
-        { key: 'Kalshi',    fav: kalshiFav, always: false },
+        { key: 'Model',       fav: modelFav,        always: true },
+        { key: 'Cycle',       fav: ceFav,           always: false },
+        { key: 'Vegas',       fav: vegasFav,        always: false },
+        { key: 'Kalshi',      fav: kalshiFav,       always: false },
+        { key: 'Polymarket',  fav: polymarketFav,   always: false },
       ].filter(s => s.fav != null);
 
       const signalCount   = signals.length;
