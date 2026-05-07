@@ -993,20 +993,28 @@
           const result = await fetchTodayGames(rosterRef.current, predCacheRef.current);
           setGames(result);
           setLastFetch(new Date());
-          // Fetch Kalshi odds in parallel — don't block if it fails
+          // Fetch market odds in parallel — don't block if they fail
           if (result.length) {
+            const gameList = result.map(g => ({
+              gamePk:   g.gamePk,
+              homeTeam: g.homeName,
+              awayTeam: g.awayName,
+              dateStr:  g.dateStr,
+            }));
             fetch('/api/kalshi', {
               method: 'POST',
               headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({ games: result.map(g => ({
-                gamePk:   g.gamePk,
-                homeTeam: g.homeName,
-                awayTeam: g.awayName,
-                dateStr:  g.dateStr,
-              }))}),
+              body: JSON.stringify({ games: gameList }),
             }).then(r => r.ok ? r.json() : null)
               .then(d => { if (d?.odds) setKalshiOdds(d.odds); })
-              .catch(() => {}); // silent — Kalshi is supplementary
+              .catch(() => {});
+            fetch('/api/polymarket', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ games: gameList }),
+            }).then(r => r.ok ? r.json() : null)
+              .then(d => { if (d?.odds) setPolymarketOdds(d.odds); })
+              .catch(() => {});
           }
         } catch(e) {
           setError(e.message);
