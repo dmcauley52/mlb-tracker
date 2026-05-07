@@ -30,8 +30,8 @@ DATABASE_URL    = os.getenv("DATABASE_URL")
 SIM_ITERATIONS  = 10_000
 
 # ── Model constants (keep in sync with analytics.js BACKTEST_WEIGHTS) ────────
-WOBA_RUN_SCALE   = 14.1
-MAX_PRED_RUNS    = 9.0
+WOBA_RUN_SCALE   = 17.0
+MAX_PRED_RUNS    = 7.5
 SCORE_BOOST      = 0.08
 OPP_ERA_SCALE    = 0.75
 LEAGUE_AVG_ERA   = 4.20
@@ -220,7 +220,7 @@ def simulate_game(home_dists, away_dists):
     for _ in range(9):
         ar, a_bat = simulate_half_inning(away_dists, a_bat)
         hr, h_bat = simulate_half_inning(home_dists, h_bat)
-        a_inn.append(ar); a_inn; h_inn.append(hr)
+        a_inn.append(ar); h_inn.append(hr)
         h_runs += hr; a_runs += ar
     return h_runs, a_runs, h_inn, a_inn
 
@@ -229,14 +229,16 @@ def run_monte_carlo(home_dists, away_dists, n=SIM_ITERATIONS):
     away_totals = []
     home_inn_acc = [0.0] * 9
     away_inn_acc = [0.0] * 9
+    home_wins = 0
     for _ in range(n):
         hr, ar, hi, ai = simulate_game(home_dists, away_dists)
+        if hr > ar:
+            home_wins += 1
         home_totals.append(hr); away_totals.append(ar)
         for i in range(9):
             home_inn_acc[i] += hi[i]; away_inn_acc[i] += ai[i]
     home_totals.sort(); away_totals.sort()
     pct = lambda arr, p: arr[int(len(arr) * p)]
-    home_wins = sum(1 for i in range(n) if home_totals[i] > away_totals[i])
     return {
         "home_median": pct(home_totals, 0.5),
         "home_p10":    pct(home_totals, 0.1),
