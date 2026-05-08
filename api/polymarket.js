@@ -1,7 +1,7 @@
 const GAMMA_URL = "https://gamma-api.polymarket.com";
 const CLOB_URL  = "https://clob.polymarket.com";
 
-// Polymarket game market questions: "[Away Team] vs. [Home Team]" using full names
+// Canonical team names as they appear in Polymarket event titles
 const TEAM_NAMES = {
   "Arizona Diamondbacks":  "Arizona Diamondbacks",
   "Atlanta Braves":        "Atlanta Braves",
@@ -46,7 +46,7 @@ async function getMidPrice(tokenId) {
   }
 }
 
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -61,37 +61,22 @@ module.exports = async function handler(req, res) {
     return res.status(400).json({ error: "Bad request: " + e.message });
   }
 
-  // Fetch active MLB game events — /events?tag=mlb returns game win/loss markets
-  // Each event has a nested `markets` array with individual outcome markets
-  let allMarkets = [];
+  // Fetch all active MLB events — tag_id=100381, limit=500 to get all game events
+  // Game events have titles like "Milwaukee Brewers vs. St. Louis Cardinals"
+  let gameEvents = [];
   try {
     const r = await fetch(
-      `${GAMMA_URL}/events?tag=mlb&active=true&closed=false&limit=100`
+      `${GAMMA_URL}/events?tag_id=100381&active=true&closed=false&limit=500`
     );
     if (!r.ok) throw new Error(`Gamma events API ${r.status}`);
     const events = await r.json();
     if (Array.isArray(events)) {
-      for (const ev of events) {
-        // Each event: { title, markets: [...] }
-        // Game markets have binary team-name outcomes, not Yes/No
-        const nested = Array.isArray(ev.markets) ? ev.markets : [];
-        for (const m of nested) {
-          // Attach event title so we can match by team name
-          m._eventTitle = ev.title || ev.question || "";
-          allMarkets.push(m);
-        }
-      }
+      // Keep only game events (title contains "vs.")
+      gameEvents = events.filter(ev => (ev.title || "").includes(" vs. ") || (ev.title || "").includes(" vs "));
     }
   } catch (e) {
     return res.status(502).json({ error: "Polymarket fetch failed: " + e.message });
   }
-
-  // Also include top-level markets that look like game markets (question contains "vs.")
-  // Some events expose markets directly with a question field
-  allMarkets = allMarkets.filter(m => {
-    const q = (m.question || m._eventTitle || "").toLowerCase();
-    return q.includes(" vs") || q.includes(" vs.");
-  });
 
   const results = {};
 
@@ -102,25 +87,30 @@ module.exports = async function handler(req, res) {
     const homeName = (TEAM_NAMES[homeTeam] || homeTeam).toLowerCase();
     const awayName = (TEAM_NAMES[awayTeam] || awayTeam).toLowerCase();
 
-    // Find market whose question/title contains both team names
-    const market = allMarkets.find(m => {
-      const q = (m.question || m._eventTitle || "").toLowerCase();
-      return q.includes(homeName) && q.includes(awayName);
+    // Find the event whose title contains both team names
+    const event = gameEvents.find(ev => {
+      const t = (ev.title || "").toLowerCase();
+      return t.includes(homeName) && t.includes(awayName);
     });
-    if (!market) return;
+    if (!event) return;
+
+    // Find the moneyline market: outcomes are team names (not Yes/No)
+    const markets = Array.isArray(event.markets) ? event.markets : [];
+    const moneyline = markets.find(m => {
+      let outcomes;
+      try { outcomes = typeof m.outcomes === "string" ? JSON.parse(m.outcomes) : (m.outcomes || []); }
+      catch { return false; }
+      return outcomes.length === 2 && !outcomes.some(o => o === "Yes" || o === "No");
+    });
+    if (!moneyline) return;
 
     // Parse stringified arrays
     let outcomes, prices, tokenIds;
     try {
-      outcomes = typeof market.outcomes === "string"
-        ? JSON.parse(market.outcomes) : (market.outcomes || []);
-      prices = typeof market.outcomePrices === "string"
-        ? JSON.parse(market.outcomePrices) : (market.outcomePrices || []);
-      tokenIds = typeof market.clobTokenIds === "string"
-        ? JSON.parse(market.clobTokenIds) : (market.clobTokenIds || []);
-    } catch {
-      return;
-    }
+      outcomes = typeof moneyline.outcomes === "string" ? JSON.parse(moneyline.outcomes) : (moneyline.outcomes || []);
+      prices   = typeof moneyline.outcomePrices === "string" ? JSON.parse(moneyline.outcomePrices) : (moneyline.outcomePrices || []);
+      tokenIds = typeof moneyline.clobTokenIds === "string" ? JSON.parse(moneyline.clobTokenIds) : (moneyline.clobTokenIds || []);
+    } catch { return; }
 
     if (outcomes.length < 2 || tokenIds.length < 2) return;
 
@@ -131,7 +121,7 @@ module.exports = async function handler(req, res) {
     if (awayIdx === -1) awayIdx = 1;
     if (homeIdx === awayIdx) awayIdx = homeIdx === 0 ? 1 : 0;
 
-    // Try live CLOB mid-prices; fall back to Gamma cached prices
+    // Try live CLOB mid-prices; fall back to Gamma cached outcomePrices
     const [homeMid, awayMid] = await Promise.all([
       getMidPrice(tokenIds[homeIdx]),
       getMidPrice(tokenIds[awayIdx]),
@@ -149,13 +139,13 @@ module.exports = async function handler(req, res) {
     }
 
     results[gamePk] = {
-      question:  market.question || market._eventTitle,
+      question:  event.title,
       homeWinProb,
       awayWinProb,
-      volume:    parseFloat(market.volume) || null,
-      liquidity: parseFloat(market.liquidity) || null,
+      volume:    parseFloat(event.volume) || null,
+      liquidity: parseFloat(event.liquidity) || null,
     };
   }));
 
   return res.status(200).json({ odds: results });
-};
+}

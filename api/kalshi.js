@@ -1,4 +1,4 @@
-const crypto = require("crypto");
+import crypto from "crypto";
 
 const BASE_URL = "https://api.elections.kalshi.com/trade-api/v2";
 
@@ -37,7 +37,7 @@ const TEAM_ABBRS = {
   "Washington Nationals":   ["WSH", "WAS"],
 };
 
-const { readFileSync, existsSync } = require("fs");
+import { readFileSync, existsSync } from "fs";
 
 function loadPrivateKey() {
   let keyStr = process.env.KALSHI_PRIVATE_KEY || "";
@@ -83,7 +83,7 @@ function tickerMatchesGame(ticker, homeAbbrs, awayAbbrs) {
   ));
 }
 
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
