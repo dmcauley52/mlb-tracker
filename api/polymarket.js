@@ -1,8 +1,7 @@
 const GAMMA_URL = "https://gamma-api.polymarket.com";
 const CLOB_URL  = "https://clob.polymarket.com";
 
-// Polymarket game markets use exact full team names: "Pittsburgh Pirates vs. San Francisco Giants"
-// These are the canonical names as they appear on Polymarket (away vs. home)
+// Polymarket game market questions: "[Away Team] vs. [Home Team]" using full names
 const TEAM_NAMES = {
   "Arizona Diamondbacks":  "Arizona Diamondbacks",
   "Atlanta Braves":        "Atlanta Braves",
@@ -36,7 +35,6 @@ const TEAM_NAMES = {
   "Washington Nationals":  "Washington Nationals",
 };
 
-// Fetch mid-price for a CLOB token (0–1 probability)
 async function getMidPrice(tokenId) {
   try {
     const r = await fetch(`${CLOB_URL}/midpoint?token_id=${tokenId}`);
@@ -48,41 +46,7 @@ async function getMidPrice(tokenId) {
   }
 }
 
-// Search Gamma API for a specific game market using team name as keyword
-// Returns matching market or null
-async function findGameMarket(homeTeam, awayTeam) {
-  const homeName = TEAM_NAMES[homeTeam] || homeTeam;
-  const awayName = TEAM_NAMES[awayTeam] || awayTeam;
-
-  // Polymarket format: "[Away] vs. [Home]" — search by the home team name
-  // (shorter/more distinctive keyword reduces false positives)
-  const query = encodeURIComponent(homeName);
-  try {
-    const r = await fetch(
-      `${GAMMA_URL}/markets?q=${query}&active=true&closed=false&limit=20`
-    );
-    if (!r.ok) return null;
-    const markets = await r.json();
-    if (!Array.isArray(markets)) return null;
-
-    // Find exact game market: question must contain both full team names
-    // and have binary outcomes (not Yes/No season markets)
-    return markets.find(m => {
-      const q = (m.question || "").toLowerCase();
-      if (!q.includes(homeName.toLowerCase())) return false;
-      if (!q.includes(awayName.toLowerCase())) return false;
-      // Exclude season-long Yes/No markets — game markets have team names as outcomes
-      const outcomes = typeof m.outcomes === "string"
-        ? JSON.parse(m.outcomes) : (m.outcomes || []);
-      return outcomes.length === 2
-        && !outcomes.some(o => o === "Yes" || o === "No");
-    }) || null;
-  } catch {
-    return null;
-  }
-}
-
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -97,17 +61,55 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Bad request: " + e.message });
   }
 
+  // Fetch active MLB game events — /events?tag=mlb returns game win/loss markets
+  // Each event has a nested `markets` array with individual outcome markets
+  let allMarkets = [];
+  try {
+    const r = await fetch(
+      `${GAMMA_URL}/events?tag=mlb&active=true&closed=false&limit=100`
+    );
+    if (!r.ok) throw new Error(`Gamma events API ${r.status}`);
+    const events = await r.json();
+    if (Array.isArray(events)) {
+      for (const ev of events) {
+        // Each event: { title, markets: [...] }
+        // Game markets have binary team-name outcomes, not Yes/No
+        const nested = Array.isArray(ev.markets) ? ev.markets : [];
+        for (const m of nested) {
+          // Attach event title so we can match by team name
+          m._eventTitle = ev.title || ev.question || "";
+          allMarkets.push(m);
+        }
+      }
+    }
+  } catch (e) {
+    return res.status(502).json({ error: "Polymarket fetch failed: " + e.message });
+  }
+
+  // Also include top-level markets that look like game markets (question contains "vs.")
+  // Some events expose markets directly with a question field
+  allMarkets = allMarkets.filter(m => {
+    const q = (m.question || m._eventTitle || "").toLowerCase();
+    return q.includes(" vs") || q.includes(" vs.");
+  });
+
   const results = {};
 
-  // Search for each game individually — parallel fetches, one per game
   await Promise.all(games.map(async (game) => {
     const { gamePk, homeTeam, awayTeam } = game;
     if (!homeTeam || !awayTeam) return;
 
-    const market = await findGameMarket(homeTeam, awayTeam);
+    const homeName = (TEAM_NAMES[homeTeam] || homeTeam).toLowerCase();
+    const awayName = (TEAM_NAMES[awayTeam] || awayTeam).toLowerCase();
+
+    // Find market whose question/title contains both team names
+    const market = allMarkets.find(m => {
+      const q = (m.question || m._eventTitle || "").toLowerCase();
+      return q.includes(homeName) && q.includes(awayName);
+    });
     if (!market) return;
 
-    // Parse stringified arrays from Gamma API
+    // Parse stringified arrays
     let outcomes, prices, tokenIds;
     try {
       outcomes = typeof market.outcomes === "string"
@@ -122,16 +124,14 @@ export default async function handler(req, res) {
 
     if (outcomes.length < 2 || tokenIds.length < 2) return;
 
-    // Match outcome index to home/away by exact name
-    const homeName = (TEAM_NAMES[homeTeam] || homeTeam).toLowerCase();
-    const awayName = (TEAM_NAMES[awayTeam] || awayTeam).toLowerCase();
+    // Match outcome index to home/away by name
     let homeIdx = outcomes.findIndex(o => o.toLowerCase().includes(homeName) || homeName.includes(o.toLowerCase()));
     let awayIdx = outcomes.findIndex(o => o.toLowerCase().includes(awayName) || awayName.includes(o.toLowerCase()));
     if (homeIdx === -1) homeIdx = 0;
     if (awayIdx === -1) awayIdx = 1;
     if (homeIdx === awayIdx) awayIdx = homeIdx === 0 ? 1 : 0;
 
-    // Try live CLOB mid-prices; fall back to Gamma's cached outcomePrices
+    // Try live CLOB mid-prices; fall back to Gamma cached prices
     const [homeMid, awayMid] = await Promise.all([
       getMidPrice(tokenIds[homeIdx]),
       getMidPrice(tokenIds[awayIdx]),
@@ -141,7 +141,7 @@ export default async function handler(req, res) {
     if (homeWinProb == null) return;
     if (awayWinProb == null) awayWinProb = 1 - homeWinProb;
 
-    // Normalise so they sum to 1 (remove vig)
+    // Normalise to sum to 1
     const total = homeWinProb + awayWinProb;
     if (total > 0) {
       homeWinProb = +(homeWinProb / total).toFixed(3);
@@ -149,7 +149,7 @@ export default async function handler(req, res) {
     }
 
     results[gamePk] = {
-      question:  market.question || market.title,
+      question:  market.question || market._eventTitle,
       homeWinProb,
       awayWinProb,
       volume:    parseFloat(market.volume) || null,
@@ -158,4 +158,4 @@ export default async function handler(req, res) {
   }));
 
   return res.status(200).json({ odds: results });
-}
+};

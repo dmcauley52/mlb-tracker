@@ -1631,12 +1631,14 @@ async function fetchTodayGames(roster, predCache) {
       }
       var namedCount = named.filter(Boolean).length;
 
-      // If fewer than 5 matched by name, fall back to top-9 by predCache score
+      // If fewer than 5 matched by name, fall back to top-9 by wOBA (predCache may be empty)
       if (namedCount < 5) {
         var sorted = players
-          .filter(function(p) { return predCache[p.player_name]; })
+          .filter(function(p) { return (p.avgWoba || 0) > 0 || predCache[p.player_name]; })
           .sort(function(a, b) {
-            return (predCache[b.player_name].score || 0) - (predCache[a.player_name].score || 0);
+            var sa = (predCache[a.player_name] && predCache[a.player_name].score) || ((a.avgWoba || 0.310) * 200);
+            var sb = (predCache[b.player_name] && predCache[b.player_name].score) || ((b.avgWoba || 0.310) * 200);
+            return sb - sa;
           })
           .slice(0, 9);
         return sorted.map(function(p) { return { player: p }; });
@@ -1645,8 +1647,30 @@ async function fetchTodayGames(roster, predCache) {
     }
     var homeEntries = lineupEntries(homeLineup, homeId, homeName);
     var awayEntries = lineupEntries(awayLineup, awayId, awayName);
-    var homeCycleEdge = computeCycleEdge(homeEntries, predCache);
-    var awayCycleEdge = computeCycleEdge(awayEntries, predCache);
+
+    // Build an augmented predCache that synthesises neutral entries for uncached players
+    // so computeCycleEdge can run even when the Hitters tab hasn't been visited yet.
+    // wOBA 0.310 = league avg → score 50, phase 15, trend 12, matchup 5, tier neutral
+    var augCache = Object.assign({}, predCache);
+    var allEntries = homeEntries.concat(awayEntries);
+    allEntries.forEach(function(e) {
+      if (!e || !e.player) return;
+      var name = e.player.player_name;
+      if (augCache[name]) return;
+      var woba = e.player.avgWoba || 0.310;
+      // Scale wOBA (0.200–0.420) to a 0–99 score centred on 50 at 0.310
+      var synScore = Math.round(Math.min(99, Math.max(1, (woba - 0.310) * 500 + 50)));
+      var synPhase = Math.round(synScore * 30 / 99);
+      var synTrend = Math.round(synScore * 25 / 99);
+      augCache[name] = {
+        score: synScore,
+        tier: woba >= 0.360 ? 'hot' : woba >= 0.330 ? 'warm' : woba >= 0.290 ? 'neutral' : 'cold',
+        breakdown: { phaseScore: synPhase, trendScore: synTrend, opsScore: 0, momentumScore: 0, matchupScore: 5 },
+      };
+    });
+
+    var homeCycleEdge = computeCycleEdge(homeEntries, augCache);
+    var awayCycleEdge = computeCycleEdge(awayEntries, augCache);
 
     // CycleEdge win probability: logistic on (home - away) cycle edge score difference
     var cycleEdgeHomeProb = null, cycleEdgeAwayProb = null, cycleEdgeFavorite = null;
