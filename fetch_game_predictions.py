@@ -103,7 +103,9 @@ def fetch_pitcher_profile(cur, pitcher_name):
         ORDER BY fetched_date DESC LIMIT 1
     """, (pitcher_name,))
     row = cur.fetchone()
-    return (float(row[0]), float(row[1])) if row else (LEAGUE_AVG_ERA, LEAGUE_AVG_K9)
+    if not row or row[0] is None or row[1] is None:
+        return (LEAGUE_AVG_ERA, LEAGUE_AVG_K9)
+    return (float(row[0]), float(row[1]))
 
 # ── PA distribution helpers ───────────────────────────────────────────────────
 def compute_distribution(games):
