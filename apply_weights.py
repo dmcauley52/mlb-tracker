@@ -151,3 +151,24 @@ except subprocess.CalledProcessError as e:
     print(f"\nGit commit failed: {e}")
     print("Files were patched but not committed — commit manually.")
     exit(1)
+
+# ── Snapshot to weight_history ────────────────────────────────────────────────
+conn = psycopg2.connect(DATABASE_URL)
+cur  = conn.cursor()
+cur.execute("""
+    INSERT INTO weight_history
+    (effective_date, season,
+     woba_run_scale, opp_era_scale, max_predicted_runs, score_boost,
+     prev_woba_run_scale, prev_opp_era_scale, prev_max_predicted_runs,
+     source, notes)
+    VALUES (%s,%s, %s,%s,%s,%s, %s,%s,%s, %s,%s)
+""", (
+    str(date.today()), SEASON,
+    best_scale, best_era, best_max, 0.08,
+    float(cur_scale), float(cur_era), float(cur_max),
+    "auto-tune", rec_text,
+))
+conn.commit()
+cur.close()
+conn.close()
+print("Recorded weight_history snapshot.")

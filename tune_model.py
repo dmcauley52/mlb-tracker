@@ -28,11 +28,13 @@ SEASON      = 2026
 DAYS_WINDOW = int(os.getenv("DAYS", 21))
 LEAGUE_AVG_ERA = 4.20
 
-# Current production weights — must match fetch_backtest_cache.py WEIGHTS
+# Current production weights — analytics.js (live UI) is the source of truth.
+# Python files (fetch_backtest_cache.py / fetch_game_predictions.py / fetch_kalshi_outcomes.py)
+# still hold the older 17.0/7.5 values; apply_weights.py will sync them on the first APPLY.
 CURRENT_WEIGHTS = {
-    "woba_run_scale":    17.0,
+    "woba_run_scale":    14.1,
     "opp_era_scale":     0.75,
-    "max_predicted_runs": 7.5,
+    "max_predicted_runs": 9.0,
     "score_boost":        0.08,
     "spot_weights": [1.15, 1.12, 1.10, 1.05, 1.02, 0.95, 0.90, 0.88, 0.83],
 }
@@ -40,7 +42,7 @@ CURRENT_WEIGHTS = {
 # Grid search space
 SCALE_CANDIDATES    = [12.0, 13.0, 14.0, 14.1, 15.0, 16.0, 17.0, 18.0, 18.5]
 ERA_SCALE_CANDIDATES = [0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85]
-MAX_RUNS_CANDIDATES  = [7.0, 7.5, 8.0, 8.5, 9.0]
+MAX_RUNS_CANDIDATES  = [7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0]
 
 # Thresholds to recommend a weight change
 MAE_IMPROVEMENT_THRESHOLD = 0.10   # must improve run MAE by at least 0.10 runs

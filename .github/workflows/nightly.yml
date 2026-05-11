@@ -20,6 +20,8 @@ on:
           - prediction-outcomes
           - tune-model
           - apply-weights
+          - migrate-weight-history
+          - compare-weights
 
   schedule:
     - cron: '0 9 * * *'   # 9 AM UTC — after all games are final (outcomes + gamelogs)
@@ -55,6 +57,12 @@ jobs:
       - name: Create model_tuning_log table (run once)
         if: github.event.inputs.mode == 'migrate-tuning'
         run: python migrate_model_tuning.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: Create weight_history tables (run once)
+        if: github.event.inputs.mode == 'migrate-weight-history'
+        run: python migrate_weight_history.py
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
@@ -164,6 +172,17 @@ jobs:
           git push || echo "Nothing to push"
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: Compare current vs previous weights (A/B)
+        if: >
+          github.event.inputs.mode == 'nightly' ||
+          github.event.inputs.mode == 'nightly-cache' ||
+          github.event.inputs.mode == 'compare-weights' ||
+          github.event.inputs.mode == ''
+        run: python compare_weights.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DAYS: 21
 
       - name: Nightly Kalshi tracker (fill outcomes only)
         if: >
