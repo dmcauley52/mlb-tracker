@@ -15,8 +15,10 @@ on:
           - backfill-games
           - nightly-cache
           - migrate-predictions
+          - migrate-tuning
           - predict-games
           - prediction-outcomes
+          - tune-model
 
   schedule:
     - cron: '0 9 * * *'   # 9 AM UTC — after all games are final (outcomes + gamelogs)
@@ -46,6 +48,12 @@ jobs:
       - name: Create game_predictions table (run once)
         if: github.event.inputs.mode == 'migrate-predictions'
         run: python migrate_game_predictions.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: Create model_tuning_log table (run once)
+        if: github.event.inputs.mode == 'migrate-tuning'
+        run: python migrate_model_tuning.py
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
@@ -126,6 +134,17 @@ jobs:
           github.event.inputs.mode == 'nightly-cache' ||
           github.event.inputs.mode == ''
         run: python fetch_backtest_cache.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DAYS: 21
+
+      - name: Nightly model tuning suggestions
+        if: >
+          github.event.inputs.mode == 'nightly' ||
+          github.event.inputs.mode == 'nightly-cache' ||
+          github.event.inputs.mode == 'tune-model' ||
+          github.event.inputs.mode == ''
+        run: python tune_model.py
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DAYS: 21
