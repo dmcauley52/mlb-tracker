@@ -19,6 +19,7 @@ on:
           - predict-games
           - prediction-outcomes
           - tune-model
+          - apply-weights
 
   schedule:
     - cron: '0 9 * * *'   # 9 AM UTC — after all games are final (outcomes + gamelogs)
@@ -148,6 +149,21 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DAYS: 21
+
+      - name: Apply weight changes if recommended
+        if: >
+          github.event.inputs.mode == 'nightly' ||
+          github.event.inputs.mode == 'nightly-cache' ||
+          github.event.inputs.mode == 'tune-model' ||
+          github.event.inputs.mode == 'apply-weights' ||
+          github.event.inputs.mode == ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          python apply_weights.py
+          git push || echo "Nothing to push"
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
       - name: Nightly Kalshi tracker (fill outcomes only)
         if: >
