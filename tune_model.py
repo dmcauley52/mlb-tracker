@@ -32,9 +32,9 @@ LEAGUE_AVG_ERA = 4.20
 # Python files (fetch_backtest_cache.py / fetch_game_predictions.py / fetch_kalshi_outcomes.py)
 # still hold the older 17.0/7.5 values; apply_weights.py will sync them on the first APPLY.
 CURRENT_WEIGHTS = {
-    "woba_run_scale":    14.1,
-    "opp_era_scale":     0.75,
-    "max_predicted_runs": 9.0,
+    "woba_run_scale":    12.0,
+    "opp_era_scale":     0.85,
+    "max_predicted_runs": 7.0,
     "score_boost":        0.08,
     "spot_weights": [1.15, 1.12, 1.10, 1.05, 1.02, 0.95, 0.90, 0.88, 0.83],
 }

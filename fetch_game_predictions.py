@@ -30,10 +30,10 @@ DATABASE_URL    = os.getenv("DATABASE_URL")
 SIM_ITERATIONS  = 10_000
 
 # ── Model constants (keep in sync with analytics.js BACKTEST_WEIGHTS) ────────
-WOBA_RUN_SCALE   = 17.0
-MAX_PRED_RUNS    = 7.5
+WOBA_RUN_SCALE   = 12.0
+MAX_PRED_RUNS    = 7.0
 SCORE_BOOST      = 0.08
-OPP_ERA_SCALE    = 0.75
+OPP_ERA_SCALE    = 0.85
 LEAGUE_AVG_ERA   = 4.20
 LEAGUE_AVG_K9    = 8.5
 SPOT_WEIGHTS     = [1.15, 1.12, 1.10, 1.05, 1.02, 0.95, 0.90, 0.88, 0.83]

@@ -27,8 +27,8 @@ KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", "")
 MONTHS      = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"]
 LEAGUE_AVG_ERA  = 4.20
-WOBA_RUN_SCALE  = 17.0
-MAX_RUNS        = 7.5
+WOBA_RUN_SCALE  = 12.0
+MAX_RUNS        = 7.0
 
 # ── Cycle scoring constants (mirrors analytics.js) ────────────────────────
 MIN_PERIOD      = 4

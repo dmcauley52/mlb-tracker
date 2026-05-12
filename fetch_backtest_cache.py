@@ -36,10 +36,10 @@ WOBA_WEIGHTS = {
 
 # Tunable model weights - keep in sync with analytics.js BACKTEST_WEIGHTS
 WEIGHTS = {
-    "woba_run_scale": 17.0,   # lowered from 18.5 — reduces systematic run inflation
-    "max_predicted_runs": 7.5, # cap prevents 9-10R predictions that always flip to Win
+    "woba_run_scale": 12.0,   # lowered from 18.5 — reduces systematic run inflation
+    "max_predicted_runs": 7.0, # cap prevents 9-10R predictions that always flip to Win
     "score_boost":    0.08,
-    "opp_era_scale":  0.75,  # raised from 0.55 so elite/bad starters matter more
+    "opp_era_scale":  0.85,  # raised from 0.55 so elite/bad starters matter more
     "spot_weights":   [1.15, 1.12, 1.10, 1.05, 1.02, 0.95, 0.90, 0.88, 0.83],
 }
 
