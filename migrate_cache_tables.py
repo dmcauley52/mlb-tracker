@@ -100,9 +100,11 @@ CREATE TABLE IF NOT EXISTS backtest_results (
     avg_woba_mae     NUMERIC(5,4),
     game_rows        JSONB,
     suggested_lineup JSONB,
+    weights_snapshot JSONB,
     created_at       TIMESTAMP DEFAULT NOW(),
     PRIMARY KEY (team, run_date, days_window)
 );
+ALTER TABLE backtest_results ADD COLUMN IF NOT EXISTS weights_snapshot JSONB;
 CREATE INDEX IF NOT EXISTS backtest_results_team_idx ON backtest_results (team);
 CREATE INDEX IF NOT EXISTS backtest_results_date_idx ON backtest_results (run_date);
 """)

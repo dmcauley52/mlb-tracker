@@ -312,15 +312,16 @@ for team, rows in game_rows_by_team.items():
             INSERT INTO backtest_results
             (team, run_date, days_window, season,
              games_eval, win_accuracy, avg_run_mae, avg_woba_mae,
-             game_rows, created_at)
-            VALUES (%s,%s,%s,%s, %s,%s,%s,%s, %s, NOW())
+             game_rows, weights_snapshot, created_at)
+            VALUES (%s,%s,%s,%s, %s,%s,%s,%s, %s, %s, NOW())
             ON CONFLICT (team, run_date, days_window) DO UPDATE SET
-                games_eval   = EXCLUDED.games_eval,
-                win_accuracy = EXCLUDED.win_accuracy,
-                avg_run_mae  = EXCLUDED.avg_run_mae,
-                avg_woba_mae = EXCLUDED.avg_woba_mae,
-                game_rows    = EXCLUDED.game_rows,
-                created_at   = NOW()
+                games_eval       = EXCLUDED.games_eval,
+                win_accuracy     = EXCLUDED.win_accuracy,
+                avg_run_mae      = EXCLUDED.avg_run_mae,
+                avg_woba_mae     = EXCLUDED.avg_woba_mae,
+                game_rows        = EXCLUDED.game_rows,
+                weights_snapshot = EXCLUDED.weights_snapshot,
+                created_at       = NOW()
         """, (
             team, str(today), DAYS_WINDOW, SEASON,
             primary["games_eval"] if primary else 0,
@@ -332,6 +333,7 @@ for team, rows in game_rows_by_team.items():
                 "actualSummary":   act_sum,
                 "suggestedSummary": sug_sum,
             }, cls=_DecimalEncoder),
+            json.dumps(WEIGHTS, cls=_DecimalEncoder),
         ))
         conn.commit()
         acc = f"{round(primary['win_accuracy']*100)}%" if primary else "-"
