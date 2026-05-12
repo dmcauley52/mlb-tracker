@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(git push *)",
-      "WebFetch(domain:gamma-api.polymarket.com)"
+      "WebFetch(domain:gamma-api.polymarket.com)",
+      "Bash(git pull *)"
     ]
   },
   "hooks": {

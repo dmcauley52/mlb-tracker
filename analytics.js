@@ -1012,16 +1012,42 @@ function buildOpponentLineup(players, predCache) {
 }
 
 // ── Game Plan Backtesting ──────────────────────────────────────────────────
-// Weights for the run-prediction model (tunable)
+// Weights for the run-prediction model. Source of truth is the model_weights
+// table (weight_set_name='live'). Values below are the fallback used until
+// loadModelWeights() resolves, and if the Supabase fetch fails.
 var BACKTEST_WEIGHTS = {
-  wobaRunScale:    12.0,  // avg lineup wOBA * scale = predicted runs; calibrated to MLB avg 4.40 R/G at wOBA 0.312
+  wobaRunScale:    12.0,  // avg lineup wOBA * scale = predicted runs
   maxPredictedRuns: 7.0,  // realistic cap — big offensive games reach 8-9 R
   scoreBoost:      0.08,  // fractional bonus from avg prediction score (0–99)
   oppEraScale:     0.85,  // era factor weight
   winMarginThresh: 0.35,  // run-diff threshold below which we call it a toss-up
-  // Batting order PA weights (spots 1-9): top of order sees more PAs per game
   spotWeights:     [1.15, 1.12, 1.10, 1.05, 1.02, 0.95, 0.90, 0.88, 0.83],
 };
+
+// Loads the 'live' weight set from Supabase and mutates BACKTEST_WEIGHTS in
+// place so existing references keep working. Safe to call repeatedly; a no-op
+// if creds are missing or the row doesn't exist.
+async function loadModelWeights(sbUrl, sbKey) {
+  if (!sbUrl || !sbKey) return BACKTEST_WEIGHTS;
+  try {
+    var r = await fetch(
+      sbUrl + "/rest/v1/model_weights?weight_set_name=eq.live&select=*",
+      { headers: { apikey: sbKey, Authorization: "Bearer " + sbKey } }
+    );
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    var rows = await r.json();
+    if (!rows || !rows.length) return BACKTEST_WEIGHTS;
+    var row = rows[0];
+    BACKTEST_WEIGHTS.wobaRunScale     = +row.woba_run_scale;
+    BACKTEST_WEIGHTS.maxPredictedRuns = +row.max_predicted_runs;
+    BACKTEST_WEIGHTS.scoreBoost       = +row.score_boost;
+    BACKTEST_WEIGHTS.oppEraScale      = +row.opp_era_scale;
+    if (Array.isArray(row.spot_weights)) BACKTEST_WEIGHTS.spotWeights = row.spot_weights;
+  } catch (e) {
+    console.warn("loadModelWeights failed, using fallback:", e.message);
+  }
+  return BACKTEST_WEIGHTS;
+}
 
 // Fetch past N days of a team's completed games from the MLB Stats API
 async function _fetchPastGames(teamName, days) {
@@ -1813,7 +1839,7 @@ if (typeof module !== 'undefined' && module.exports) {
     backtestForecast, applyPhaseColoring, scoreColor, phaseAvg,
     transformRows, transformMLBSplits,
     scorePlayerAtSpot, buildOptimalLineup, buildOpponentLineup,
-    backtestGamePlan, BACKTEST_WEIGHTS,
+    backtestGamePlan, BACKTEST_WEIGHTS, loadModelWeights,
     fetchTodayGames, computeCycleEdge,
   };
 }

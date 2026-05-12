@@ -29,14 +29,15 @@ GAME_DATE       = os.getenv("GAME_DATE", str(date.today()))
 DATABASE_URL    = os.getenv("DATABASE_URL")
 SIM_ITERATIONS  = 10_000
 
-# ── Model constants (keep in sync with analytics.js BACKTEST_WEIGHTS) ────────
-WOBA_RUN_SCALE   = 12.0
-MAX_PRED_RUNS    = 7.0
-SCORE_BOOST      = 0.08
-OPP_ERA_SCALE    = 0.85
+# ── Model constants — overwritten from model_weights table in main() ─────────
+from model_weights import load_weights, FALLBACK_BACKTEST
+WOBA_RUN_SCALE   = FALLBACK_BACKTEST["woba_run_scale"]
+MAX_PRED_RUNS    = FALLBACK_BACKTEST["max_predicted_runs"]
+SCORE_BOOST      = FALLBACK_BACKTEST["score_boost"]
+OPP_ERA_SCALE    = FALLBACK_BACKTEST["opp_era_scale"]
 LEAGUE_AVG_ERA   = 4.20
 LEAGUE_AVG_K9    = 8.5
-SPOT_WEIGHTS     = [1.15, 1.12, 1.10, 1.05, 1.02, 0.95, 0.90, 0.88, 0.83]
+SPOT_WEIGHTS     = FALLBACK_BACKTEST["spot_weights"]
 SPOT_PA          = [4.5,  4.4,  4.3,  4.2,  4.1,  4.0,  3.95, 3.9,  3.8]
 
 WOBA_WEIGHTS = {"bb": 0.690, "hbp": 0.722, "single": 0.888,
@@ -339,6 +340,15 @@ def main():
     print(f"fetch_game_predictions.py — {GAME_DATE}")
     conn = get_conn()
     cur  = conn.cursor()
+
+    global WOBA_RUN_SCALE, MAX_PRED_RUNS, SCORE_BOOST, OPP_ERA_SCALE, SPOT_WEIGHTS
+    w = load_weights(cur, "backtest", FALLBACK_BACKTEST)
+    WOBA_RUN_SCALE = w["woba_run_scale"]
+    MAX_PRED_RUNS  = w["max_predicted_runs"]
+    SCORE_BOOST    = w["score_boost"]
+    OPP_ERA_SCALE  = w["opp_era_scale"]
+    SPOT_WEIGHTS   = w["spot_weights"]
+    print(f"Loaded weights: woba_run_scale={WOBA_RUN_SCALE} max_pred_runs={MAX_PRED_RUNS} opp_era_scale={OPP_ERA_SCALE}")
 
     games = fetch_todays_games(GAME_DATE)
     print(f"Found {len(games)} games with lineups posted")

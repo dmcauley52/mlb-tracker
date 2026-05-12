@@ -6,10 +6,10 @@ Loads the last DAYS_WINDOW days of game_rows from backtest_results,
 runs a grid search over woba_run_scale and opp_era_scale,
 and writes a suggestion row to model_tuning_log.
 
-Does NOT auto-apply weights. If recommendation == 'APPLY', manually update:
-  - fetch_backtest_cache.py  WEIGHTS dict
-  - fetch_game_predictions.py  WOBA_RUN_SCALE / OPP_ERA_SCALE
-  - analytics.js  BACKTEST_WEIGHTS
+Does NOT auto-apply weights. apply_weights.py picks up APPLY rows and updates
+the model_weights table; all consumers (analytics.js, fetch_backtest_cache.py,
+fetch_game_predictions.py, fetch_kalshi_outcomes.py) read from that table on
+startup.
 
 Usage:
   python tune_model.py
@@ -28,16 +28,10 @@ SEASON      = 2026
 DAYS_WINDOW = int(os.getenv("DAYS", 21))
 LEAGUE_AVG_ERA = 4.20
 
-# Current production weights — analytics.js (live UI) is the source of truth.
-# Python files (fetch_backtest_cache.py / fetch_game_predictions.py / fetch_kalshi_outcomes.py)
-# still hold the older 17.0/7.5 values; apply_weights.py will sync them on the first APPLY.
-CURRENT_WEIGHTS = {
-    "woba_run_scale":    12.0,
-    "opp_era_scale":     0.85,
-    "max_predicted_runs": 7.0,
-    "score_boost":        0.08,
-    "spot_weights": [1.15, 1.12, 1.10, 1.05, 1.02, 0.95, 0.90, 0.88, 0.83],
-}
+# Current production weights — loaded from model_weights table after DB connect.
+# Module-level dict is the fallback if the row is missing.
+from model_weights import load_weights, FALLBACK_BACKTEST
+CURRENT_WEIGHTS = dict(FALLBACK_BACKTEST)
 
 # Grid search space
 SCALE_CANDIDATES    = [12.0, 13.0, 14.0, 14.1, 15.0, 16.0, 17.0, 18.0, 18.5]
@@ -118,6 +112,10 @@ def evaluate_weights(game_rows, w):
 # ── DB connection ─────────────────────────────────────────────────────────────
 conn = psycopg2.connect(os.getenv("DATABASE_URL"))
 cur  = conn.cursor()
+CURRENT_WEIGHTS = load_weights(cur, "backtest", FALLBACK_BACKTEST)
+print(f"Baseline weights from DB: woba_run_scale={CURRENT_WEIGHTS['woba_run_scale']} "
+      f"opp_era_scale={CURRENT_WEIGHTS['opp_era_scale']} "
+      f"max_predicted_runs={CURRENT_WEIGHTS['max_predicted_runs']}")
 today      = date.today()
 start_date = today - timedelta(days=DAYS_WINDOW)
 

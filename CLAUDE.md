@@ -115,10 +115,12 @@ Always paginate in 1000-row chunks until `page.length < PAGE` to avoid silent tr
 POST to `/api/scout` with `{ prompt }`. Hitters prompt includes DFT cycle data + prediction score. Pitchers prompt includes ERA/WHIP/K9 trend + cycle length + prediction score.
 
 ## Game Predictions — Backtest Model
-Defined in `analytics.js` — `BACKTEST_WEIGHTS` (keep in sync with `fetch_backtest_cache.py`):
-- `wobaRunScale: 18.5` — predicted runs = avg lineup wOBA × 18.5
-- `scoreBoost: 0.08` — player prediction scores nudge runs ±8% max
-- `oppEraScale: 0.55` — blend weight for opponent ERA factor
+Tunable weights live in the `model_weights` table (rows `'live'` and `'backtest'`). All consumers load on startup:
+- `analytics.js` → `loadModelWeights(sbUrl, sbKey)` mutates `BACKTEST_WEIGHTS` in place (called from a `useEffect` in `App()` in `index.html`).
+- Python scripts (`fetch_backtest_cache.py`, `fetch_game_predictions.py`, `fetch_kalshi_outcomes.py`, `tune_model.py`) → `model_weights.load_weights(cur, name, fallback)` after `psycopg2.connect`.
+- `apply_weights.py` writes new weights via `UPDATE model_weights …` (no more regex-patching source files or git commits).
+- Each source file keeps a hardcoded fallback dict; used only if the DB row is missing or unreachable.
+- Model fields: `wobaRunScale`, `maxPredictedRuns`, `scoreBoost`, `oppEraScale`, `spotWeights` (JSONB array of 9 spot multipliers).
 - Win model: `oppRunsEst = 4.65 + (oppWinPct - 0.500) × 13` → logistic sigmoid on run diff
 - Two predictions per game: **actual** (box score lineup) and **suggested** (optimizer top-9)
 - `BtGameRow` component in `index.html` (before `GamePlanTab`) renders each backtest row — needs own component so `useState` is legal inside `.map()`

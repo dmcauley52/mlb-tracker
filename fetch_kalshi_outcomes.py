@@ -27,8 +27,10 @@ KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", "")
 MONTHS      = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"]
 LEAGUE_AVG_ERA  = 4.20
-WOBA_RUN_SCALE  = 12.0
-MAX_RUNS        = 7.0
+# WOBA_RUN_SCALE / MAX_RUNS loaded from model_weights table after DB connect.
+from model_weights import load_weights, FALLBACK_BACKTEST
+WOBA_RUN_SCALE  = FALLBACK_BACKTEST["woba_run_scale"]
+MAX_RUNS        = FALLBACK_BACKTEST["max_predicted_runs"]
 
 # ── Cycle scoring constants (mirrors analytics.js) ────────────────────────
 MIN_PERIOD      = 4
@@ -219,6 +221,10 @@ def kalshi_get(path):
 # ── DB ─────────────────────────────────────────────────────────────────────
 conn = psycopg2.connect(os.getenv("DATABASE_URL"))
 cur  = conn.cursor()
+_w = load_weights(cur, "backtest", FALLBACK_BACKTEST)
+WOBA_RUN_SCALE = _w["woba_run_scale"]
+MAX_RUNS       = _w["max_predicted_runs"]
+print(f"Loaded weights: woba_run_scale={WOBA_RUN_SCALE} max_runs={MAX_RUNS}")
 today     = date.today()
 tomorrow  = today + timedelta(days=1)
 yesterday = today - timedelta(days=1)

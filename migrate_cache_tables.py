@@ -108,6 +108,27 @@ CREATE INDEX IF NOT EXISTS backtest_results_date_idx ON backtest_results (run_da
 """)
 print("✓ backtest_results")
 
+# ── 5. model_weights ──────────────────────────────────────────────────────────
+cur.execute("""
+CREATE TABLE IF NOT EXISTS model_weights (
+    weight_set_name     TEXT PRIMARY KEY,
+    woba_run_scale      NUMERIC NOT NULL,
+    max_predicted_runs  NUMERIC NOT NULL,
+    score_boost         NUMERIC NOT NULL,
+    opp_era_scale       NUMERIC NOT NULL,
+    spot_weights        JSONB   NOT NULL,
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_by          TEXT
+);
+INSERT INTO model_weights
+    (weight_set_name, woba_run_scale, max_predicted_runs, score_boost, opp_era_scale, spot_weights, updated_by)
+VALUES
+    ('live',     12.0, 7.0, 0.08, 0.85, '[1.15,1.12,1.10,1.05,1.02,0.95,0.90,0.88,0.83]'::jsonb, 'seed'),
+    ('backtest', 12.0, 7.0, 0.08, 0.85, '[1.15,1.12,1.10,1.05,1.02,0.95,0.90,0.88,0.83]'::jsonb, 'seed')
+ON CONFLICT (weight_set_name) DO NOTHING;
+""")
+print("✓ model_weights")
+
 conn.commit()
 cur.close()
 conn.close()

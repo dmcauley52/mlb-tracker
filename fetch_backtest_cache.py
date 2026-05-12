@@ -34,14 +34,10 @@ WOBA_WEIGHTS = {
     "double": 1.271, "triple": 1.616, "hr": 2.101,
 }
 
-# Tunable model weights - keep in sync with analytics.js BACKTEST_WEIGHTS
-WEIGHTS = {
-    "woba_run_scale": 12.0,   # lowered from 18.5 — reduces systematic run inflation
-    "max_predicted_runs": 7.0, # cap prevents 9-10R predictions that always flip to Win
-    "score_boost":    0.08,
-    "opp_era_scale":  0.85,  # raised from 0.55 so elite/bad starters matter more
-    "spot_weights":   [1.15, 1.12, 1.10, 1.05, 1.02, 0.95, 0.90, 0.88, 0.83],
-}
+# Tunable model weights — loaded from model_weights table after DB connect.
+# Module-level dict is the fallback used if the DB row is missing.
+from model_weights import load_weights, FALLBACK_BACKTEST
+WEIGHTS = dict(FALLBACK_BACKTEST)
 
 def spot_weighted_woba(wobas):
     """Spot-weighted avg wOBA: top-of-order PA weights, normalized so mean is preserved."""
@@ -101,6 +97,10 @@ def predict_game(avg_woba, avg_score, opp_era, opp_win_pct, opp_lineup_woba=None
 # ── DB connection ─────────────────────────────────────────────────────────────
 conn = psycopg2.connect(os.getenv("DATABASE_URL"))
 cur  = conn.cursor()
+WEIGHTS = load_weights(cur, "backtest", FALLBACK_BACKTEST)
+print(f"Loaded backtest weights: woba_run_scale={WEIGHTS['woba_run_scale']} "
+      f"max_predicted_runs={WEIGHTS['max_predicted_runs']} "
+      f"opp_era_scale={WEIGHTS['opp_era_scale']}")
 today      = date.today()
 start_date = today - timedelta(days=DAYS_WINDOW)
 

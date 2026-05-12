@@ -165,11 +165,7 @@ jobs:
           github.event.inputs.mode == 'tune-model' ||
           github.event.inputs.mode == 'apply-weights' ||
           github.event.inputs.mode == ''
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          python apply_weights.py
-          git push || echo "Nothing to push"
+        run: python apply_weights.py
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
