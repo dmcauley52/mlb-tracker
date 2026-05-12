@@ -3208,6 +3208,13 @@ Write a tight 4-sentence manager's pregame brief: (1) our lineup's biggest advan
       const mlbRef = useRef(null);
       const batchRunId = useRef(0);
 
+      // Load tunable model weights from Supabase (mutates BACKTEST_WEIGHTS in place).
+      useEffect(() => {
+        if (sbUrl && sbKey && typeof loadModelWeights === "function") {
+          loadModelWeights(sbUrl, sbKey);
+        }
+      }, [sbUrl, sbKey]);
+
       const loadRoster = useCallback(async()=>{
         if(dataSource==="mlb"){
           setRoster(Object.keys(MLB_IDS).map(name=>({player_name:name,team:"MLB"}))); setSelectedPlayer(null); setRosterError(""); return;
