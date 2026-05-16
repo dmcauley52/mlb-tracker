@@ -87,6 +87,9 @@ function getParkFactor(venueAbbr) {
 
 // ── Real schedule fetch ────────────────────────────────────────────────────
 var LEAGUE_AVG_ERA = 4.20;
+var OPP_RUNS_BASE = 4.40;
+var WIN_PCT_RUN_SCALE = 13.0;
+var WIN_PROB_SIGMOID_SCALE = 0.40;
 var _teamsListCache = null;
 var _scheduleCache = {};
 var _eraLeaderboardCache = null;
@@ -1209,14 +1212,14 @@ function _predictGame(lineupWobas, lineupScores, oppEra, oppWinPct, oppLineupWob
   );
 
   // Opponent run estimate — also scaled by park factor
-  var oppRunsWinPct = 4.40 + (oppWinPct - 0.500) * 13.0;
+  var oppRunsWinPct = OPP_RUNS_BASE + (oppWinPct - 0.500) * WIN_PCT_RUN_SCALE;
   var oppRunsEst = (oppLineupWoba != null && oppLineupWoba > 0)
     ? (oppLineupWoba * w.wobaRunScale * 0.6 + oppRunsWinPct * 0.4) * parkFactor
     : oppRunsWinPct * parkFactor;
 
   // Softened sigmoid (0.40) — less confident on close run differentials
   var runDiff = predictedRuns - oppRunsEst;
-  var winProb = 1 / (1 + Math.exp(-runDiff * 0.40));
+  var winProb = 1 / (1 + Math.exp(-runDiff * WIN_PROB_SIGMOID_SCALE));
 
   return {
     predictedRuns:     +predictedRuns.toFixed(2),
@@ -1830,6 +1833,7 @@ function computeCycleEdge(lineupPlayers, predCache) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     CYCLE_LENGTH, FORECAST_DAYS, MAX_COMPONENTS, MIN_PERIOD, MIN_AMPLITUDE,
+    LEAGUE_AVG_ERA, OPP_RUNS_BASE, WIN_PCT_RUN_SCALE, WIN_PROB_SIGMOID_SCALE,
     WOBA_WEIGHTS, computeWOBA,
     PHASE_CONFIG, UPCOMING_SCHEDULE,
     getPhase,
@@ -1840,6 +1844,6 @@ if (typeof module !== 'undefined' && module.exports) {
     transformRows, transformMLBSplits,
     scorePlayerAtSpot, buildOptimalLineup, buildOpponentLineup,
     backtestGamePlan, BACKTEST_WEIGHTS, loadModelWeights,
-    fetchTodayGames, computeCycleEdge,
+    fetchTodayGames, computeCycleEdge, _predictGame,
   };
 }

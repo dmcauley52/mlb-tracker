@@ -21,10 +21,19 @@ import time
 import urllib.request
 from datetime import date, timedelta
 from dotenv import load_dotenv
+from model_config import (
+    LEAGUE_AVG_DIST,
+    LEAGUE_AVG_ERA,
+    LEAGUE_AVG_K9,
+    OPP_RUNS_BASE,
+    SEASON,
+    WIN_PCT_RUN_SCALE,
+    WIN_PROB_SIGMOID_SCALE,
+    WOBA_WEIGHTS,
+)
 
 load_dotenv()
 
-SEASON          = 2026
 GAME_DATE       = os.getenv("GAME_DATE", str(date.today()))
 DATABASE_URL    = os.getenv("DATABASE_URL")
 SIM_ITERATIONS  = 10_000
@@ -35,18 +44,8 @@ WOBA_RUN_SCALE   = FALLBACK_BACKTEST["woba_run_scale"]
 MAX_PRED_RUNS    = FALLBACK_BACKTEST["max_predicted_runs"]
 SCORE_BOOST      = FALLBACK_BACKTEST["score_boost"]
 OPP_ERA_SCALE    = FALLBACK_BACKTEST["opp_era_scale"]
-LEAGUE_AVG_ERA   = 4.20
-LEAGUE_AVG_K9    = 8.5
 SPOT_WEIGHTS     = FALLBACK_BACKTEST["spot_weights"]
 SPOT_PA          = [4.5,  4.4,  4.3,  4.2,  4.1,  4.0,  3.95, 3.9,  3.8]
-
-WOBA_WEIGHTS = {"bb": 0.690, "hbp": 0.722, "single": 0.888,
-                "double": 1.271, "triple": 1.616, "hr": 2.101}
-
-LEAGUE_AVG_DIST = {
-    "hr": 0.033, "trip": 0.004, "dbl": 0.047, "s1b": 0.145,
-    "bb": 0.084, "k": 0.220, "out": 0.467,
-}
 
 # ── HTTP helper ───────────────────────────────────────────────────────────────
 def mlb_get(path, retries=3):
@@ -290,12 +289,12 @@ def predict_runs_woba(lineup_wobas, opp_era, my_win_pct, opp_win_pct,
         MAX_PRED_RUNS
     )
 
-    opp_runs_wpc = 4.40 + (opp_win_pct - 0.500) * 13.0
+    opp_runs_wpc = OPP_RUNS_BASE + (opp_win_pct - 0.500) * WIN_PCT_RUN_SCALE
     opp_runs_est = ((opp_lineup_woba * WOBA_RUN_SCALE * 0.6 + opp_runs_wpc * 0.4) * park_factor
                     if opp_lineup_woba else opp_runs_wpc * park_factor)
 
     run_diff = predicted - opp_runs_est
-    win_prob = 1 / (1 + math.exp(-run_diff * 0.40))
+    win_prob = 1 / (1 + math.exp(-run_diff * WIN_PROB_SIGMOID_SCALE))
 
     return {
         "predicted_runs": round(predicted, 2),

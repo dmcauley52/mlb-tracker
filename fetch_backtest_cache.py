@@ -23,16 +23,17 @@ class _DecimalEncoder(json.JSONEncoder):
 import math
 from datetime import date, timedelta
 from dotenv import load_dotenv
+from model_config import (
+    LEAGUE_AVG_ERA,
+    OPP_RUNS_BASE,
+    SEASON,
+    WIN_PCT_RUN_SCALE,
+    WIN_PROB_SIGMOID_SCALE,
+    WOBA_WEIGHTS,
+)
 load_dotenv()
 
-SEASON      = 2026
 DAYS_WINDOW = int(os.getenv("DAYS", 21))
-LEAGUE_AVG_ERA = 4.20
-
-WOBA_WEIGHTS = {
-    "bb": 0.690, "hbp": 0.722, "single": 0.888,
-    "double": 1.271, "triple": 1.616, "hr": 2.101,
-}
 
 # Tunable model weights — loaded from model_weights table after DB connect.
 # Module-level dict is the fallback used if the DB row is missing.
@@ -78,14 +79,14 @@ def predict_game(avg_woba, avg_score, opp_era, opp_win_pct, opp_lineup_woba=None
         avg_woba * w["woba_run_scale"] * score_factor * adj_era_factor * team_quality,
         w["max_predicted_runs"]
     )
-    opp_runs_win_pct = 4.65 + (float(opp_win_pct) - 0.500) * 13.0
+    opp_runs_win_pct = OPP_RUNS_BASE + (float(opp_win_pct) - 0.500) * WIN_PCT_RUN_SCALE
     if opp_lineup_woba:
         opp_runs_est = float(opp_lineup_woba) * w["woba_run_scale"] * 0.6 + opp_runs_win_pct * 0.4
     else:
         opp_runs_est = opp_runs_win_pct
     run_diff        = predicted_runs - opp_runs_est
     # Fix 3: softened sigmoid (0.40 vs 0.55) - less confident on close run differentials
-    win_prob        = 1 / (1 + math.exp(-run_diff * 0.40))
+    win_prob        = 1 / (1 + math.exp(-run_diff * WIN_PROB_SIGMOID_SCALE))
     return {
         "predicted_runs": round(predicted_runs, 2),
         "predicted_woba": round(avg_woba, 4),

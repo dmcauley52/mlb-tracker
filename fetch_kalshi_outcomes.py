@@ -17,16 +17,21 @@ from dotenv import load_dotenv
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
 from cryptography.hazmat.backends import default_backend
+from model_config import (
+    LEAGUE_AVG_ERA,
+    OPP_RUNS_BASE,
+    SEASON,
+    WIN_PCT_RUN_SCALE,
+    WIN_PROB_SIGMOID_SCALE,
+)
 
 load_dotenv()
 
 MODE        = os.getenv("MODE", "morning")
-SEASON      = 2026
 GAP_THRESH  = 0.10
 KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", "")
 MONTHS      = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"]
-LEAGUE_AVG_ERA  = 4.20
 # WOBA_RUN_SCALE / MAX_RUNS loaded from model_weights table after DB connect.
 from model_weights import load_weights, FALLBACK_BACKTEST
 WOBA_RUN_SCALE  = FALLBACK_BACKTEST["woba_run_scale"]
@@ -289,15 +294,15 @@ def find_kalshi_prob(home_team, away_team, game_date, events, mkt_by_event):
 def model_home_prob(home_woba, away_woba, home_win_pct, away_win_pct, home_sp_era, away_sp_era):
     def pred_runs(woba, my_wpc, opp_era):
         era_f  = max(0.80, min(1.30, opp_era / LEAGUE_AVG_ERA))
-        adj    = era_f * 0.75 + 1.0 * 0.25
+        adj    = era_f * _w["opp_era_scale"] + 1.0 * (1 - _w["opp_era_scale"])
         team_q = max(0.88, min(1.12, 1.0 + (my_wpc - 0.500) * 0.5))
         return min(woba * WOBA_RUN_SCALE * adj * team_q, MAX_RUNS)
     hr    = pred_runs(home_woba, home_win_pct, away_sp_era)
     ar    = pred_runs(away_woba, away_win_pct, home_sp_era)
-    opp_h = 4.65 + (away_win_pct - 0.500) * 13.0
-    opp_a = 4.65 + (home_win_pct - 0.500) * 13.0
-    rh    = 1 / (1 + math.exp(-(hr - opp_h) * 0.40))
-    ra    = 1 / (1 + math.exp(-(ar - opp_a) * 0.40))
+    opp_h = OPP_RUNS_BASE + (away_win_pct - 0.500) * WIN_PCT_RUN_SCALE
+    opp_a = OPP_RUNS_BASE + (home_win_pct - 0.500) * WIN_PCT_RUN_SCALE
+    rh    = 1 / (1 + math.exp(-(hr - opp_h) * WIN_PROB_SIGMOID_SCALE))
+    ra    = 1 / (1 + math.exp(-(ar - opp_a) * WIN_PROB_SIGMOID_SCALE))
     s     = rh + ra
     return round(rh / s, 3) if s > 0 else 0.500
 
