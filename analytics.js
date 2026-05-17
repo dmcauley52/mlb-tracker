@@ -68,17 +68,17 @@ var PARK_FACTORS = {
   'SEA': 0.99, // T-Mobile Park
   'STL': 0.99, // Busch Stadium
   'WSH': 0.98, // Nationals Park
-  'KCR': 0.98, // Kauffman Stadium
+  'KC':  0.98, // Kauffman Stadium
   'CLE': 0.97, // Progressive Field
   'NYM': 0.97, // Citi Field
   'PIT': 0.97, // PNC Park
   'LAD': 0.96, // Dodger Stadium
-  'SFG': 0.96, // Oracle Park
-  'TBR': 0.96, // Tropicana Field
-  'CHW': 0.95, // Guaranteed Rate Field
-  'OAK': 0.95, // Oakland Coliseum / Sacramento
+  'SF':  0.96, // Oracle Park
+  'TB':  0.96, // Tropicana Field
+  'CWS': 0.95, // Guaranteed Rate Field
+  'ATH': 0.95, // Oakland Coliseum / Sacramento
   'MIA': 0.94, // loanDepot park
-  'SDP': 0.93, // Petco Park — extreme pitcher park
+  'SD':  0.93, // Petco Park — extreme pitcher park
 };
 
 function getParkFactor(venueAbbr) {

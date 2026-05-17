@@ -39,13 +39,16 @@ const TEAM_ABBRS = {
 
 import { readFileSync, existsSync } from "fs";
 
+let _cachedPrivateKey = null;
 function loadPrivateKey() {
+  if (_cachedPrivateKey) return _cachedPrivateKey;
   let keyStr = process.env.KALSHI_PRIVATE_KEY || "";
   // Fall back to local pem file when running via vercel dev
   if (keyStr.length < 100 && existsSync("kalshi_private.pem")) {
     keyStr = readFileSync("kalshi_private.pem", "utf8");
   }
-  return crypto.createPrivateKey({ key: keyStr.replace(/\\n/g, "\n"), format: "pem" });
+  _cachedPrivateKey = crypto.createPrivateKey({ key: keyStr.replace(/\\n/g, "\n"), format: "pem" });
+  return _cachedPrivateKey;
 }
 
 function signedHeaders(method, path) {
