@@ -1,4 +1,4 @@
-# MLB Cycle Analyzer — AGENTS.md
+# MLB Cycle Analyzer — Claude.md
 
 ## Project
 - **Repo**: `mlb-tracker` (GitHub), deployed on Vercel
@@ -11,7 +11,7 @@
 |-----|-------|---------|
 | `SB_URL` | Vercel + `.env` | Supabase project URL |
 | `SB_KEY` | Vercel + `.env` | Supabase anon key |
-| `ANTHROPIC_API_KEY` | Vercel | Codex API |
+| `ANTHROPIC_API_KEY` | Vercel | Claude API |
 | `DEFAULT_TEAM` | Vercel | e.g. `Seattle Mariners` — pre-filters sidebar |
 | `DATABASE_URL` | `.env` | Direct postgres connection for Python scripts |
 
