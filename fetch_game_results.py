@@ -20,7 +20,7 @@ from datetime import date, timedelta
 from dotenv import load_dotenv
 load_dotenv()
 
-SEASON             = 2026
+SEASON             = int(os.getenv("SEASON", 2026))
 DEFAULT_MODE       = os.getenv("MODE", "nightly")
 BACKFILL_START_DATE = os.getenv("BACKFILL_START", f"{SEASON}-03-20")
 

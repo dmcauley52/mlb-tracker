@@ -6,10 +6,11 @@ import urllib.request
 from dotenv import load_dotenv
 load_dotenv()
 
-SEASON = 2026
+SEASON = int(os.getenv("SEASON", 2026))
 MIN_INNINGS = 1.0   # at least 1 IP in the season to be included
 
-conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+conn = psycopg2.connect(os.getenv("DATABASE_URL"),
+    keepalives=1, keepalives_idle=60, keepalives_interval=10, keepalives_count=5)
 cur = conn.cursor()
 
 # ── Step 0: Create table if it doesn't exist ──────────────────────────

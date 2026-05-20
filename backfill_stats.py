@@ -6,7 +6,7 @@ import urllib.request
 from dotenv import load_dotenv
 load_dotenv()
 
-SEASON = 2026
+SEASON = int(os.getenv("SEASON", 2026))
 MIN_AT_BATS = 20
 
 WOBA_WEIGHTS = {"bb": 0.690, "hbp": 0.722, "single": 0.888, "double": 1.271, "triple": 1.616, "hr": 2.101}
@@ -37,7 +37,8 @@ def f(s, key):
     except (TypeError, ValueError):
         return None
 
-conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+conn = psycopg2.connect(os.getenv("DATABASE_URL"),
+    keepalives=1, keepalives_idle=60, keepalives_interval=10, keepalives_count=5)
 cur = conn.cursor()
 
 # ── Step 1: Get qualified batters ──────────────────────────────────────
