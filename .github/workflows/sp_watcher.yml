@@ -1,0 +1,35 @@
+name: SP Scratch Watcher
+
+on:
+  workflow_dispatch: {}  # manual trigger for testing
+
+  schedule:
+    # Every 30 min, noon–midnight ET (16:00–04:00 UTC)
+    # Covers the window when SP scratches typically happen
+    - cron: '0,30 16-23 * * *'
+    - cron: '0,30 0-4  * * *'
+
+permissions:
+  actions: write  # allows GITHUB_TOKEN to dispatch predict_on_demand.yml
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install psycopg2-binary python-dotenv requests
+
+      - name: Check for SP changes and dispatch predictions
+        run: python sp_watcher.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          GH_TOKEN:     ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO:      ${{ github.repository }}
+          GH_REF:       ${{ github.ref_name }}
