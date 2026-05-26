@@ -338,12 +338,18 @@ def build_distributions(player_names, games_map, sp_era=None, sp_k9=None):
 
 def sample_pa(dist):
     r = random.random()
-    c = dist["hr"];   if r < c: return "hr"
-    c += dist["trip"]; if r < c: return "trip"
-    c += dist["dbl"];  if r < c: return "dbl"
-    c += dist["s1b"];  if r < c: return "s1b"
-    c += dist["bb"];   if r < c: return "bb"
-    c += dist["k"];    if r < c: return "k"
+    c = dist["hr"]
+    if r < c: return "hr"
+    c += dist["trip"]
+    if r < c: return "trip"
+    c += dist["dbl"]
+    if r < c: return "dbl"
+    c += dist["s1b"]
+    if r < c: return "s1b"
+    c += dist["bb"]
+    if r < c: return "bb"
+    c += dist["k"]
+    if r < c: return "k"
     return "out"
 
 
