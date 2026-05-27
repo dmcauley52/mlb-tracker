@@ -10,6 +10,7 @@ on:
     - cron: '0,30 0-4  * * *'
 
 permissions:
+  contents: read  # required for actions/checkout
   actions: write  # allows GITHUB_TOKEN to dispatch predict_on_demand.yml
 
 jobs:
