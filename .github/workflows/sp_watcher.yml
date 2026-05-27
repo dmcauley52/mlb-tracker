@@ -13,6 +13,9 @@ permissions:
   contents: read  # required for actions/checkout
   actions: write  # allows GITHUB_TOKEN to dispatch predict_on_demand.yml
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   watch:
     runs-on: ubuntu-latest
