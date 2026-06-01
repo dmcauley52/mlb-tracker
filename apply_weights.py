@@ -11,15 +11,31 @@ Exits with code 0 in all cases (no APPLY row = no-op, not an error).
 """
 import psycopg2
 import os
-from datetime import date
+from datetime import date, timedelta
 from dotenv import load_dotenv
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 SEASON       = 2026
+REWEIGHT_INTERVAL_DAYS = 7   # apply auto-tune changes at most once a week
 
 conn = psycopg2.connect(DATABASE_URL)
 cur  = conn.cursor()
+
+# ── Throttle: skip if last auto-tune apply was within the last week ───────────
+cur.execute("""
+    SELECT MAX(effective_date)
+    FROM weight_history
+    WHERE source = 'auto-tune' AND season = %s
+""", (SEASON,))
+last = cur.fetchone()[0]
+if last and (date.today() - last) < timedelta(days=REWEIGHT_INTERVAL_DAYS):
+    next_eligible = last + timedelta(days=REWEIGHT_INTERVAL_DAYS)
+    print(f"Last auto-tune apply was {last} (< {REWEIGHT_INTERVAL_DAYS}d ago) — "
+          f"skipping until {next_eligible}.")
+    cur.close()
+    conn.close()
+    exit(0)
 
 # ── Fetch latest APPLY row ────────────────────────────────────────────────────
 cur.execute("""
