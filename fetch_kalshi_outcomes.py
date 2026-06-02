@@ -60,7 +60,8 @@ def _load_private_key():
 def kalshi_headers(method, path):
     private_key = _load_private_key()
     ts  = str(int(time.time() * 1000))
-    msg = f"{ts}{method.upper()}/trade-api/v2{path}".encode()
+    path_no_qs = path.split("?")[0]  # Kalshi signs path only, not query string
+    msg = f"{ts}{method.upper()}/trade-api/v2{path_no_qs}".encode()
     sig = private_key.sign(msg, asym_padding.PSS(mgf=asym_padding.MGF1(hashes.SHA256()), salt_length=32), hashes.SHA256())
     return {
         "Content-Type":            "application/json",
