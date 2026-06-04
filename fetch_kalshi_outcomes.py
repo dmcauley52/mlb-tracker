@@ -29,6 +29,7 @@ from prediction_engine import (
     compute_player_score,
     compute_cycle_edge,
     cycle_edge_prob,
+    current_win_streak,
     model_home_prob,
 )
 
@@ -40,7 +41,7 @@ KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", "")
 MONTHS      = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"]
 # WOBA_RUN_SCALE / MAX_RUNS loaded from model_weights table after DB connect.
-from model_weights import load_weights, FALLBACK_BACKTEST
+from model_weights import load_weights, blend_win_pct, FALLBACK_BACKTEST
 WOBA_RUN_SCALE  = FALLBACK_BACKTEST["woba_run_scale"]
 MAX_RUNS        = FALLBACK_BACKTEST["max_predicted_runs"]
 
@@ -353,6 +354,19 @@ if MODE in ("morning", "pregame"):
     }
     team_by_id = {v["id"]: k for k, v in team_stats.items()}
 
+    # Current win streaks per team (for streak-aware l10 cap)
+    cur.execute("""
+        SELECT home_team, away_team, home_score, away_score
+        FROM game_results WHERE season = %s AND home_score IS NOT NULL
+        ORDER BY game_date ASC
+    """, (SEASON,))
+    _streak_results = {}
+    for ht, at, hs, aws in cur.fetchall():
+        _streak_results.setdefault(ht, []).append(hs > aws)
+        _streak_results.setdefault(at, []).append(aws > hs)
+    team_streaks = {t: current_win_streak(res) for t, res in _streak_results.items()}
+    print(f"  Win streaks computed for {len(team_streaks)} teams")
+
     # Player wOBA (recent-weighted)
     cur.execute("""
         SELECT player_name,
@@ -540,8 +554,14 @@ if MODE in ("morning", "pregame"):
 
         ht = team_stats.get(home_team, {})
         at = team_stats.get(away_team, {})
-        hwp = ht.get("l10_win_pct", 0.5) * 0.5 + ht.get("win_pct", 0.5) * 0.5
-        awp = at.get("l10_win_pct", 0.5) * 0.5 + at.get("win_pct", 0.5) * 0.5
+        hwp = blend_win_pct(ht.get("win_pct", 0.5), ht.get("l10_win_pct", 0.5), _w["l10_cap"],
+                            streak=team_streaks.get(home_team, 0),
+                            streak_cap_4=_w["streak_cap_4"], streak_cap_6=_w["streak_cap_6"],
+                            streak_med_start=_w["streak_med_start"], streak_high_start=_w["streak_high_start"])
+        awp = blend_win_pct(at.get("win_pct", 0.5), at.get("l10_win_pct", 0.5), _w["l10_cap"],
+                            streak=team_streaks.get(away_team, 0),
+                            streak_cap_4=_w["streak_cap_4"], streak_cap_6=_w["streak_cap_6"],
+                            streak_med_start=_w["streak_med_start"], streak_high_start=_w["streak_high_start"])
 
         mhp  = model_home_prob(g["home_lineup_woba"], g["away_lineup_woba"],
                                hwp, awp, g["home_sp_era"], g["away_sp_era"], weights=_w)

@@ -20,10 +20,11 @@ from datetime import date, datetime, timedelta, timezone
 from dotenv import load_dotenv
 
 from model_config import LEAGUE_AVG_ERA, LEAGUE_AVG_K9, SEASON
-from model_weights import load_weights, FALLBACK_BACKTEST
+from model_weights import load_weights, blend_win_pct, FALLBACK_BACKTEST
 from prediction_engine import (
     compute_player_score,
     compute_cycle_edge,
+    current_win_streak,
     cycle_edge_prob,
     model_home_prob,
 )
@@ -162,8 +163,28 @@ def main():
                   for r in cur.fetchall()}
     ht  = team_stats.get(home_team, {"win_pct": 0.500, "l10_win_pct": 0.500})
     at  = team_stats.get(away_team, {"win_pct": 0.500, "l10_win_pct": 0.500})
-    hwp = ht["l10_win_pct"] * 0.5 + ht["win_pct"] * 0.5
-    awp = at["l10_win_pct"] * 0.5 + at["win_pct"] * 0.5
+
+    # Current win streaks for streak-aware l10 cap
+    cur.execute("""
+        SELECT home_team, away_team, home_score, away_score
+        FROM game_results WHERE season = %s AND home_score IS NOT NULL
+        ORDER BY game_date ASC
+    """, (SEASON,))
+    _sr = {}
+    for _ht, _at, _hs, _aws in cur.fetchall():
+        _sr.setdefault(_ht, []).append(_hs > _aws)
+        _sr.setdefault(_at, []).append(_aws > _hs)
+    home_streak = current_win_streak(_sr.get(home_team, []))
+    away_streak = current_win_streak(_sr.get(away_team, []))
+
+    hwp = blend_win_pct(ht["win_pct"], ht["l10_win_pct"], weights["l10_cap"],
+                        streak=home_streak,
+                        streak_cap_4=weights["streak_cap_4"], streak_cap_6=weights["streak_cap_6"],
+                        streak_med_start=weights["streak_med_start"], streak_high_start=weights["streak_high_start"])
+    awp = blend_win_pct(at["win_pct"], at["l10_win_pct"], weights["l10_cap"],
+                        streak=away_streak,
+                        streak_cap_4=weights["streak_cap_4"], streak_cap_6=weights["streak_cap_6"],
+                        streak_med_start=weights["streak_med_start"], streak_high_start=weights["streak_high_start"])
 
     # ── 4. Player wOBA (recent-weighted season aggregate) ────────────────────────
     cur.execute("""

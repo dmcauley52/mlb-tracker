@@ -17,6 +17,17 @@ from model_config import (
 )
 from model_weights import FALLBACK_BACKTEST
 
+def current_win_streak(results):
+    """results: list of bool ordered oldest-first. Returns consecutive wins entering the next game."""
+    streak = 0
+    for won in reversed(results):
+        if won:
+            streak += 1
+        else:
+            break
+    return streak
+
+
 # ── Cycle analysis constants (mirrors analytics.js) ──────────────────────────
 MIN_PERIOD     = 4
 MIN_AMPLITUDE  = 0.005
@@ -220,7 +231,9 @@ def predict_runs_woba(lineup_wobas, opp_era, my_win_pct, opp_win_pct,
     avg_woba     = (sum(wt * wo for wt, wo in zip(raw_w, lineup_wobas)) / w_sum
                     if w_sum > 0 else 0.310)
 
-    era_factor   = max(0.80, min(1.30, opp_era / LEAGUE_AVG_ERA)) if opp_era else 1.0
+    _efloor      = w.get("era_floor", 0.60)
+    _eceil       = w.get("era_ceil",  1.30)
+    era_factor   = max(_efloor, min(_eceil, opp_era / LEAGUE_AVG_ERA)) if opp_era else 1.0
     adj_era      = era_factor * w["opp_era_scale"] + 1.0 * (1 - w["opp_era_scale"])
     team_quality = max(0.88, min(1.12, 1.0 + (my_win_pct - 0.500) * 0.5))
 
@@ -229,7 +242,8 @@ def predict_runs_woba(lineup_wobas, opp_era, my_win_pct, opp_win_pct,
         w["max_predicted_runs"]
     )
 
-    opp_runs_wpc = OPP_RUNS_BASE + (opp_win_pct - 0.500) * WIN_PCT_RUN_SCALE
+    wprs         = w.get("win_pct_run_scale", WIN_PCT_RUN_SCALE)
+    opp_runs_wpc = OPP_RUNS_BASE + (opp_win_pct - 0.500) * wprs
     opp_runs_est = ((opp_lineup_woba * w["woba_run_scale"] * 0.6 + opp_runs_wpc * 0.4) * park_factor
                     if opp_lineup_woba else opp_runs_wpc * park_factor)
 
@@ -251,16 +265,20 @@ def model_home_prob(home_woba, away_woba, home_win_pct, away_win_pct,
     """
     w = weights or FALLBACK_BACKTEST
 
+    _efloor = w.get("era_floor", 0.60)
+    _eceil  = w.get("era_ceil",  1.30)
+
     def pred_runs(woba, my_wpc, opp_era):
-        era_f  = max(0.80, min(1.30, opp_era / LEAGUE_AVG_ERA))
+        era_f  = max(_efloor, min(_eceil, opp_era / LEAGUE_AVG_ERA))
         adj    = era_f * w["opp_era_scale"] + 1.0 * (1 - w["opp_era_scale"])
         team_q = max(0.88, min(1.12, 1.0 + (my_wpc - 0.500) * 0.5))
         return min(woba * w["woba_run_scale"] * adj * team_q, w["max_predicted_runs"])
 
+    wprs  = w.get("win_pct_run_scale", WIN_PCT_RUN_SCALE)
     hr    = pred_runs(home_woba, home_win_pct, away_sp_era)
     ar    = pred_runs(away_woba, away_win_pct, home_sp_era)
-    opp_h = OPP_RUNS_BASE + (away_win_pct - 0.500) * WIN_PCT_RUN_SCALE
-    opp_a = OPP_RUNS_BASE + (home_win_pct - 0.500) * WIN_PCT_RUN_SCALE
+    opp_h = OPP_RUNS_BASE + (away_win_pct - 0.500) * wprs
+    opp_a = OPP_RUNS_BASE + (home_win_pct - 0.500) * wprs
     rh    = 1 / (1 + math.exp(-(hr - opp_h) * WIN_PROB_SIGMOID_SCALE))
     ra    = 1 / (1 + math.exp(-(ar - opp_a) * WIN_PROB_SIGMOID_SCALE))
     s     = rh + ra
