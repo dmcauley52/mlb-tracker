@@ -238,21 +238,21 @@ for row in games_raw:
         l10  = float(opp_info.get("l10_win_pct") or opp_info.get("win_pct") or 0.500)
         seas = float(opp_info.get("win_pct") or 0.500)
         opp_streak  = game_streak.get((opp_team, game_pk), 0)
-        opp_win_pct = blend_win_pct(seas, l10, weights["l10_cap"],
+        opp_win_pct = blend_win_pct(seas, l10, WEIGHTS["l10_cap"],
                                     streak=opp_streak,
-                                    streak_cap_4=weights["streak_cap_4"],
-                                    streak_cap_6=weights["streak_cap_6"],
-                                    streak_med_start=weights["streak_med_start"],
-                                    streak_high_start=weights["streak_high_start"]) if opp_info.get("l10_win_pct") else seas
+                                    streak_cap_4=WEIGHTS["streak_cap_4"],
+                                    streak_cap_6=WEIGHTS["streak_cap_6"],
+                                    streak_med_start=WEIGHTS["streak_med_start"],
+                                    streak_high_start=WEIGHTS["streak_high_start"]) if opp_info.get("l10_win_pct") else seas
         my_l10  = float(my_info.get("l10_win_pct") or my_info.get("win_pct") or 0.500)
         my_seas = float(my_info.get("win_pct") or 0.500)
         my_streak  = game_streak.get((my_team, game_pk), 0)
-        my_win_pct = blend_win_pct(my_seas, my_l10, weights["l10_cap"],
+        my_win_pct = blend_win_pct(my_seas, my_l10, WEIGHTS["l10_cap"],
                                    streak=my_streak,
-                                   streak_cap_4=weights["streak_cap_4"],
-                                   streak_cap_6=weights["streak_cap_6"],
-                                   streak_med_start=weights["streak_med_start"],
-                                   streak_high_start=weights["streak_high_start"]) if my_info.get("l10_win_pct") else my_seas
+                                   streak_cap_4=WEIGHTS["streak_cap_4"],
+                                   streak_cap_6=WEIGHTS["streak_cap_6"],
+                                   streak_med_start=WEIGHTS["streak_med_start"],
+                                   streak_high_start=WEIGHTS["streak_high_start"]) if my_info.get("l10_win_pct") else my_seas
 
         # Actual lineup wOBA + momentum scores from roster map
         actual_players  = [roster_map.get(p["name"], {}) for p in my_lineup if p.get("name")]
