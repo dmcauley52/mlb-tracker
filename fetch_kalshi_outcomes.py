@@ -71,10 +71,16 @@ def kalshi_headers(method, path):
         "KALSHI-ACCESS-SIGNATURE": base64.b64encode(sig).decode(),
     }
 
-def kalshi_get(path):
-    r = requests.get(KALSHI_BASE + path, headers=kalshi_headers("GET", path))
+def kalshi_get(path, retries=3, backoff=30):
+    for attempt in range(retries):
+        r = requests.get(KALSHI_BASE + path, headers=kalshi_headers("GET", path))
+        if r.status_code == 403 and attempt < retries - 1:
+            print(f"  Kalshi 403 on attempt {attempt+1}, retrying in {backoff}s...")
+            time.sleep(backoff)
+            continue
+        r.raise_for_status()
+        return r.json()
     r.raise_for_status()
-    return r.json()
 
 # ── DB ─────────────────────────────────────────────────────────────────────
 conn = psycopg2.connect(os.getenv("DATABASE_URL"))
@@ -530,7 +536,8 @@ if MODE in ("morning", "pregame"):
     # Fetch Vegas odds (morning only — one API call covers all games)
     vegas_odds = fetch_vegas_odds() if MODE == "morning" else {}
 
-    # Fetch Kalshi markets
+    # Fetch Kalshi markets (retry built into kalshi_get; continue without on persistent failure)
+    markets, events = [], []
     try:
         mk_data = kalshi_get("/markets?limit=200&series_ticker=KXMLBGAME&status=open")
         ev_data = kalshi_get("/events?limit=100&series_ticker=KXMLBGAME&status=open")
@@ -538,8 +545,7 @@ if MODE in ("morning", "pregame"):
         events  = ev_data.get("events", [])
         print(f"  {len(markets)} Kalshi markets, {len(events)} events")
     except Exception as e:
-        print(f"  Kalshi fetch failed: {e}")
-        cur.close(); conn.close(); exit(1)
+        print(f"  Kalshi fetch failed after retries: {e} — continuing without Kalshi odds")
 
     mkt_by_event = {}
     for m in markets:
