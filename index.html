@@ -1042,6 +1042,14 @@
 
       React.useEffect(() => { load(); }, [load]);
 
+      // Re-run once when roster first populates so cycle scores are computed with real data
+      const prevRosterLen = React.useRef(0);
+      React.useEffect(() => {
+        if (roster.length > 0 && prevRosterLen.current === 0) {
+          load();
+        }
+        prevRosterLen.current = roster.length;
+      }, [roster, load]);
 
       // Load disagreement tracker from Supabase
       React.useEffect(() => {
