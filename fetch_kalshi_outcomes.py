@@ -24,6 +24,14 @@ from model_config import (
     WIN_PCT_RUN_SCALE,
     WIN_PROB_SIGMOID_SCALE,
 )
+from prediction_engine import (
+    analyze_player_cycles,
+    compute_player_score,
+    compute_cycle_edge,
+    cycle_edge_prob,
+    current_win_streak,
+    model_home_prob,
+)
 
 load_dotenv()
 
@@ -33,165 +41,9 @@ KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", "")
 MONTHS      = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"]
 # WOBA_RUN_SCALE / MAX_RUNS loaded from model_weights table after DB connect.
-from model_weights import load_weights, FALLBACK_BACKTEST
+from model_weights import load_weights, blend_win_pct, FALLBACK_BACKTEST
 WOBA_RUN_SCALE  = FALLBACK_BACKTEST["woba_run_scale"]
 MAX_RUNS        = FALLBACK_BACKTEST["max_predicted_runs"]
-
-# ── Cycle scoring constants (mirrors analytics.js) ────────────────────────
-MIN_PERIOD      = 4
-MIN_AMPLITUDE   = 0.005
-MAX_COMPONENTS  = 5
-FORECAST_DAYS   = 14
-
-def _dft(signal):
-    """O(n²) DFT — returns (re[], im[]) each divided by N."""
-    N = len(signal)
-    re = [0.0] * N
-    im = [0.0] * N
-    for k in range(N):
-        for n in range(N):
-            angle = 2 * math.pi * k * n / N
-            re[k] += signal[n] * math.cos(angle)
-            im[k] -= signal[n] * math.sin(angle)
-        re[k] /= N
-        im[k] /= N
-    return re, im
-
-def _reconstruct_at(components, N, positions):
-    out = []
-    for x in positions:
-        v = 0.0
-        for c in components:
-            angle = 2 * math.pi * c['k'] * x / N
-            v += c['re'] * math.cos(angle) - c['im'] * math.sin(angle)
-        out.append(v)
-    return out
-
-def analyze_player_cycles(game_data):
-    """
-    game_data: list of dicts with 'avg' (batting avg or wOBA per game).
-    Returns dict with forecastValues, mean, dominantCycles, or None if insufficient.
-    """
-    N = len(game_data)
-    if N < 10:
-        return None
-    raw = [g.get('woba') or g.get('avg', 0) for g in game_data]
-    mean = sum(raw) / N
-    signal = [v - mean for v in raw]
-    re, im = _dft(signal)
-    spectrum = []
-    for k in range(1, N // 2 + 1):
-        amp = 2 * math.sqrt(re[k]**2 + im[k]**2)
-        period = N / k
-        if period < MIN_PERIOD:
-            continue
-        spectrum.append({'k': k, 'amp': amp, 'period': period, 're': re[k], 'im': im[k]})
-    spectrum.sort(key=lambda c: -c['amp'])
-    kept = [c for c in spectrum if c['amp'] >= MIN_AMPLITUDE][:MAX_COMPONENTS]
-    if not kept:
-        return None
-    components = [{'k': 0, 're': mean, 'im': 0.0}] + kept
-    reconstructed = _reconstruct_at(components, N, list(range(N)))
-    forecast_vals = _reconstruct_at(components, N, [N + i for i in range(FORECAST_DAYS)])
-    total_power = sum(c['amp']**2 for c in kept) or 1.0
-    dominant = [{'period': c['period'], 'amp': c['amp']} for c in kept]
-    return {
-        'mean': mean,
-        'reconstructed': reconstructed,
-        'forecastValues': forecast_vals,
-        'dominantCycles': dominant,
-        'N': N,
-    }
-
-def compute_player_score(game_data, season_ops=0.720):
-    """
-    Returns {'score': 0-99, 'tier': str, 'breakdown': dict} mirroring
-    computePredictionScore in analytics.js (no matchup/splits component).
-    """
-    if not game_data or len(game_data) < 3:
-        return {'score': 50, 'tier': 'neutral',
-                'breakdown': {'phaseScore': 15, 'trendScore': 12, 'opsScore': 11, 'momentumScore': 0}}
-
-    def sig(g):
-        return g.get('woba') or g.get('avg', 0)
-
-    # Phase score from DFT forecast direction (0-30)
-    analysis = analyze_player_cycles(game_data)
-    phase_score = 15
-    if analysis and analysis['forecastValues']:
-        f = analysis['forecastValues']
-        trend3  = sum(f[0:3]) / 3
-        trend3b = sum(f[1:4]) / 3
-        slope   = trend3b - trend3
-        level   = f[0] - analysis['mean']
-        if   slope >  0.010: phase_score = 30
-        elif slope >  0.004: phase_score = 26
-        elif slope >  0:     phase_score = 20
-        elif slope > -0.004: phase_score = 14
-        elif slope > -0.010: phase_score = 8
-        else:                phase_score = 4
-        if level > 0.015:
-            phase_score = min(30, phase_score + 4)
-
-    # Trend score: last-5 avg vs midpoint (0-25)
-    last5     = game_data[-5:]
-    last5_val = sum(sig(g) for g in last5) / len(last5)
-    sig_mid   = 0.315  # wOBA midpoint
-    trend_score = min(25, max(0, round((last5_val / (sig_mid * 1.4)) * 25)))
-
-    # OPS score (0-20)
-    ops = float(season_ops or 0)
-    if   ops >= 0.900: ops_score = 20
-    elif ops >= 0.800: ops_score = 16
-    elif ops >= 0.700: ops_score = 11
-    elif ops >= 0.600: ops_score = 6
-    else:              ops_score = 3
-
-    # Momentum: 2nd half of last 10 vs 1st half (0-15)
-    last10      = game_data[-10:]
-    first_half  = sum(sig(g) for g in last10[:5]) / 5 if len(last10) >= 5 else last5_val
-    second_half = sum(sig(g) for g in last10[5:]) / max(len(last10[5:]), 1)
-    momentum_score = min(15, round((second_half - first_half) * 200)) if second_half > first_half else 0
-
-    score = min(99, max(1, phase_score + trend_score + ops_score + momentum_score))
-    tier  = 'hot' if score >= 75 else 'warm' if score >= 55 else 'neutral' if score >= 35 else 'cold'
-    return {
-        'score': score, 'tier': tier,
-        'breakdown': {
-            'phaseScore':    phase_score,
-            'trendScore':    trend_score,
-            'opsScore':      ops_score,
-            'momentumScore': momentum_score,
-            'matchupScore':  5,  # neutral default (no SP data in Python)
-        },
-    }
-
-def compute_cycle_edge(player_scores):
-    """
-    player_scores: list of score dicts from compute_player_score.
-    Returns {'score': 0-100, 'hotCount': int, 'totalCount': int} or None.
-    Mirrors computeCycleEdge in analytics.js.
-    """
-    valid = [p for p in player_scores if p is not None]
-    if not valid:
-        return None
-    n = len(valid)
-    avg_phase   = sum(p['breakdown']['phaseScore']    for p in valid) / n
-    avg_trend   = sum(p['breakdown']['trendScore']    for p in valid) / n
-    avg_matchup = sum(p['breakdown'].get('matchupScore', 5) for p in valid) / n
-    hot_count   = sum(1 for p in valid if p['tier'] in ('hot', 'warm'))
-    phase_norm   = (avg_phase   / 30)  * 100
-    trend_norm   = (avg_trend   / 25)  * 100
-    heat_norm    = (hot_count   / n)   * 100
-    matchup_norm = (avg_matchup / 10)  * 100
-    raw = phase_norm * 0.40 + trend_norm * 0.30 + heat_norm * 0.20 + matchup_norm * 0.10
-    return {'score': round(raw), 'hotCount': hot_count, 'totalCount': n}
-
-def cycle_edge_prob(home_score, away_score):
-    """Logistic sigmoid on score diff → home win probability (mirrors JS)."""
-    diff = (home_score - away_score) / 100.0
-    raw  = 1 / (1 + math.exp(-diff * 3.0))
-    return round(raw, 3)
 
 # ── Kalshi auth ────────────────────────────────────────────────────────────
 def _load_private_key():
@@ -209,7 +61,8 @@ def _load_private_key():
 def kalshi_headers(method, path):
     private_key = _load_private_key()
     ts  = str(int(time.time() * 1000))
-    msg = f"{ts}{method.upper()}/trade-api/v2{path}".encode()
+    path_no_qs = path.split("?")[0]  # Kalshi signs path only, not query string
+    msg = f"{ts}{method.upper()}/trade-api/v2{path_no_qs}".encode()
     sig = private_key.sign(msg, asym_padding.PSS(mgf=asym_padding.MGF1(hashes.SHA256()), salt_length=32), hashes.SHA256())
     return {
         "Content-Type":            "application/json",
@@ -218,14 +71,24 @@ def kalshi_headers(method, path):
         "KALSHI-ACCESS-SIGNATURE": base64.b64encode(sig).decode(),
     }
 
-def kalshi_get(path):
-    r = requests.get(KALSHI_BASE + path, headers=kalshi_headers("GET", path))
+def kalshi_get(path, retries=3, backoff=30):
+    for attempt in range(retries):
+        r = requests.get(KALSHI_BASE + path, headers=kalshi_headers("GET", path))
+        if r.status_code == 403 and attempt < retries - 1:
+            print(f"  Kalshi 403 on attempt {attempt+1}, retrying in {backoff}s...")
+            time.sleep(backoff)
+            continue
+        r.raise_for_status()
+        return r.json()
     r.raise_for_status()
-    return r.json()
 
 # ── DB ─────────────────────────────────────────────────────────────────────
 conn = psycopg2.connect(os.getenv("DATABASE_URL"))
 cur  = conn.cursor()
+for _col in ("home_sp_name", "away_sp_name", "predicted_at"):
+    _typedef = "TIMESTAMPTZ" if _col == "predicted_at" else "TEXT"
+    cur.execute(f"ALTER TABLE kalshi_tracker ADD COLUMN IF NOT EXISTS {_col} {_typedef}")
+conn.commit()
 _w = load_weights(cur, "backtest", FALLBACK_BACKTEST)
 WOBA_RUN_SCALE = _w["woba_run_scale"]
 MAX_RUNS       = _w["max_predicted_runs"]
@@ -289,22 +152,6 @@ def find_kalshi_prob(home_team, away_team, game_date, events, mkt_by_event):
         mid = (ask + bid) / 2 if ask and bid else (ask or bid)
         return round(1 - mid, 3) if yes_is_away else round(mid, 3)
     return None
-
-# ── Run model ─────────────────────────────────────────────────────────────
-def model_home_prob(home_woba, away_woba, home_win_pct, away_win_pct, home_sp_era, away_sp_era):
-    def pred_runs(woba, my_wpc, opp_era):
-        era_f  = max(0.80, min(1.30, opp_era / LEAGUE_AVG_ERA))
-        adj    = era_f * _w["opp_era_scale"] + 1.0 * (1 - _w["opp_era_scale"])
-        team_q = max(0.88, min(1.12, 1.0 + (my_wpc - 0.500) * 0.5))
-        return min(woba * WOBA_RUN_SCALE * adj * team_q, MAX_RUNS)
-    hr    = pred_runs(home_woba, home_win_pct, away_sp_era)
-    ar    = pred_runs(away_woba, away_win_pct, home_sp_era)
-    opp_h = OPP_RUNS_BASE + (away_win_pct - 0.500) * WIN_PCT_RUN_SCALE
-    opp_a = OPP_RUNS_BASE + (home_win_pct - 0.500) * WIN_PCT_RUN_SCALE
-    rh    = 1 / (1 + math.exp(-(hr - opp_h) * WIN_PROB_SIGMOID_SCALE))
-    ra    = 1 / (1 + math.exp(-(ar - opp_a) * WIN_PROB_SIGMOID_SCALE))
-    s     = rh + ra
-    return round(rh / s, 3) if s > 0 else 0.500
 
 # ── The Odds API ──────────────────────────────────────────────────────────
 def fetch_vegas_odds():
@@ -513,6 +360,19 @@ if MODE in ("morning", "pregame"):
     }
     team_by_id = {v["id"]: k for k, v in team_stats.items()}
 
+    # Current win streaks per team (for streak-aware l10 cap)
+    cur.execute("""
+        SELECT home_team, away_team, home_score, away_score
+        FROM game_results WHERE season = %s AND home_score IS NOT NULL
+        ORDER BY game_date ASC
+    """, (SEASON,))
+    _streak_results = {}
+    for ht, at, hs, aws in cur.fetchall():
+        _streak_results.setdefault(ht, []).append(hs > aws)
+        _streak_results.setdefault(at, []).append(aws > hs)
+    team_streaks = {t: current_win_streak(res) for t, res in _streak_results.items()}
+    print(f"  Win streaks computed for {len(team_streaks)} teams")
+
     # Player wOBA (recent-weighted)
     cur.execute("""
         SELECT player_name,
@@ -599,11 +459,20 @@ if MODE in ("morning", "pregame"):
             away_id   = g["teams"]["away"]["team"]["id"]
             home_name = team_by_id.get(home_id) or g["teams"]["home"]["team"]["name"]
             away_name = team_by_id.get(away_id) or g["teams"]["away"]["team"]["name"]
-            home_sp_era = team_stats.get(home_name, {}).get("era", LEAGUE_AVG_ERA)
-            away_sp_era = team_stats.get(away_name, {}).get("era", LEAGUE_AVG_ERA)
-            for side, attr in [("home", "home_sp_era"), ("away", "away_sp_era")]:
+            home_sp_era  = team_stats.get(home_name, {}).get("era", LEAGUE_AVG_ERA)
+            away_sp_era  = team_stats.get(away_name, {}).get("era", LEAGUE_AVG_ERA)
+            home_sp_name = None
+            away_sp_name = None
+            for side, era_attr, name_attr in [
+                ("home", "home_sp_era",  "home_sp_name"),
+                ("away", "away_sp_era",  "away_sp_name"),
+            ]:
                 sp = g["teams"][side].get("probablePitcher")
                 if sp:
+                    if era_attr == "home_sp_era":
+                        home_sp_name = sp.get("fullName")
+                    else:
+                        away_sp_name = sp.get("fullName")
                     try:
                         sr = requests.get(
                             f"https://statsapi.mlb.com/api/v1/people/{sp['id']}/stats"
@@ -612,7 +481,7 @@ if MODE in ("morning", "pregame"):
                         splits = sr.json().get("stats", [{}])[0].get("splits", [])
                         if splits:
                             era = float(splits[0].get("stat", {}).get("era", LEAGUE_AVG_ERA))
-                            if attr == "home_sp_era":
+                            if era_attr == "home_sp_era":
                                 home_sp_era = era
                             else:
                                 away_sp_era = era
@@ -655,6 +524,8 @@ if MODE in ("morning", "pregame"):
                 "away_team":        away_name,
                 "home_sp_era":      home_sp_era,
                 "away_sp_era":      away_sp_era,
+                "home_sp_name":     home_sp_name,
+                "away_sp_name":     away_sp_name,
                 "home_lineup_woba": home_lineup_woba,
                 "away_lineup_woba": away_lineup_woba,
                 "lineup_source":    lineup_source,
@@ -665,7 +536,8 @@ if MODE in ("morning", "pregame"):
     # Fetch Vegas odds (morning only — one API call covers all games)
     vegas_odds = fetch_vegas_odds() if MODE == "morning" else {}
 
-    # Fetch Kalshi markets
+    # Fetch Kalshi markets (retry built into kalshi_get; continue without on persistent failure)
+    markets, events = [], []
     try:
         mk_data = kalshi_get("/markets?limit=200&series_ticker=KXMLBGAME&status=open")
         ev_data = kalshi_get("/events?limit=100&series_ticker=KXMLBGAME&status=open")
@@ -673,8 +545,7 @@ if MODE in ("morning", "pregame"):
         events  = ev_data.get("events", [])
         print(f"  {len(markets)} Kalshi markets, {len(events)} events")
     except Exception as e:
-        print(f"  Kalshi fetch failed: {e}")
-        cur.close(); conn.close(); exit(1)
+        print(f"  Kalshi fetch failed after retries: {e} — continuing without Kalshi odds")
 
     mkt_by_event = {}
     for m in markets:
@@ -689,11 +560,17 @@ if MODE in ("morning", "pregame"):
 
         ht = team_stats.get(home_team, {})
         at = team_stats.get(away_team, {})
-        hwp = ht.get("l10_win_pct", 0.5) * 0.5 + ht.get("win_pct", 0.5) * 0.5
-        awp = at.get("l10_win_pct", 0.5) * 0.5 + at.get("win_pct", 0.5) * 0.5
+        hwp = blend_win_pct(ht.get("win_pct", 0.5), ht.get("l10_win_pct", 0.5), _w["l10_cap"],
+                            streak=team_streaks.get(home_team, 0),
+                            streak_cap_4=_w["streak_cap_4"], streak_cap_6=_w["streak_cap_6"],
+                            streak_med_start=_w["streak_med_start"], streak_high_start=_w["streak_high_start"])
+        awp = blend_win_pct(at.get("win_pct", 0.5), at.get("l10_win_pct", 0.5), _w["l10_cap"],
+                            streak=team_streaks.get(away_team, 0),
+                            streak_cap_4=_w["streak_cap_4"], streak_cap_6=_w["streak_cap_6"],
+                            streak_med_start=_w["streak_med_start"], streak_high_start=_w["streak_high_start"])
 
         mhp  = model_home_prob(g["home_lineup_woba"], g["away_lineup_woba"],
-                               hwp, awp, g["home_sp_era"], g["away_sp_era"])
+                               hwp, awp, g["home_sp_era"], g["away_sp_era"], weights=_w)
         conf = round(abs(mhp - 0.5) * 2, 3)
         pick = "home" if mhp >= 0.5 else "away"
         sig  = "strong_edge" if conf >= 0.25 else "disagreement"
@@ -729,8 +606,9 @@ if MODE in ("morning", "pregame"):
                      kalshi_home_prob, kalshi_away_prob, kalshi_pick,
                      vegas_home_prob, vegas_away_prob, vegas_pick,
                      cycle_pick, cycle_home_score, cycle_away_score, cycle_home_prob, cycle_away_prob,
-                     prob_gap, signal_type, lineup_source, game_time_utc)
-                    VALUES (%s,%s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s, %s,%s,%s, %s,%s,%s,%s,%s, %s,%s,%s,%s)
+                     prob_gap, signal_type, lineup_source, game_time_utc,
+                     home_sp_name, away_sp_name, predicted_at)
+                    VALUES (%s,%s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s, %s,%s,%s, %s,%s,%s,%s,%s, %s,%s,%s,%s, %s,%s, NOW())
                     ON CONFLICT (game_pk, game_date) DO UPDATE SET
                         model_home_prob   = EXCLUDED.model_home_prob,
                         model_away_prob   = EXCLUDED.model_away_prob,
@@ -747,7 +625,12 @@ if MODE in ("morning", "pregame"):
                         cycle_away_prob   = COALESCE(EXCLUDED.cycle_away_prob,  kalshi_tracker.cycle_away_prob),
                         prob_gap          = EXCLUDED.prob_gap,
                         signal_type       = EXCLUDED.signal_type,
-                        lineup_source     = EXCLUDED.lineup_source
+                        lineup_source     = EXCLUDED.lineup_source,
+                        home_sp_name      = COALESCE(EXCLUDED.home_sp_name, kalshi_tracker.home_sp_name),
+                        away_sp_name      = COALESCE(EXCLUDED.away_sp_name, kalshi_tracker.away_sp_name),
+                        predicted_at      = EXCLUDED.predicted_at
+                    WHERE kalshi_tracker.predicted_at IS NULL
+                       OR kalshi_tracker.predicted_at < EXCLUDED.predicted_at
                 """, (
                     game_date, SEASON, home_team, away_team, game_pk,
                     mhp, round(1-mhp,3), pick, conf,
@@ -756,6 +639,7 @@ if MODE in ("morning", "pregame"):
                     cpick, cycle_home_sc, cycle_away_sc, cycle_home_p,
                     round(1 - cycle_home_p, 3) if cycle_home_p is not None else None,
                     gap, sig, g["lineup_source"], g["game_time_utc"],
+                    g["home_sp_name"], g["away_sp_name"],
                 ))
                 logged += 1
                 kalshi_str = f"kalshi={khp}" if khp is not None else "kalshi=n/a"

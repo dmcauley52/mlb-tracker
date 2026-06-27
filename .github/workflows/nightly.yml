@@ -27,9 +27,14 @@ on:
     - cron: '0 9 * * *'   # 9 AM UTC — after all games are final (outcomes + gamelogs)
     - cron: '0 22 * * *'  # 10 PM UTC / 6 PM ET — lineups posted, run predictions
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   fetch:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 

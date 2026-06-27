@@ -37,7 +37,8 @@ DAYS_WINDOW = int(os.getenv("DAYS", 21))
 
 # Tunable model weights — loaded from model_weights table after DB connect.
 # Module-level dict is the fallback used if the DB row is missing.
-from model_weights import load_weights, FALLBACK_BACKTEST
+from model_weights import load_weights, blend_win_pct, FALLBACK_BACKTEST
+from prediction_engine import current_win_streak
 WEIGHTS = dict(FALLBACK_BACKTEST)
 
 def spot_weighted_woba(wobas):
@@ -172,6 +173,23 @@ for name, info in roster_map.items():
 for t in team_roster:
     team_roster[t].sort(key=lambda p: p["avg_woba"], reverse=True)
 
+# ── Build full-season streak history (win streak entering each game) ─────────
+# Needed so the streak-aware l10_cap can be applied at the correct historical moment.
+print("Building team win-streak history for season...")
+cur.execute("""
+    SELECT game_pk, game_date, home_team, away_team, home_score, away_score
+    FROM game_results WHERE season = %s AND home_score IS NOT NULL
+    ORDER BY game_date ASC
+""", (SEASON,))
+_streak_results = {}   # team -> [bool, ...]  (ordered oldest-first)
+game_streak = {}       # (team, game_pk) -> win_streak entering that game
+for _pk, _gd, _ht, _at, _hs, _aws in cur.fetchall():
+    game_streak[(_ht, _pk)] = current_win_streak(_streak_results.get(_ht, []))
+    game_streak[(_at, _pk)] = current_win_streak(_streak_results.get(_at, []))
+    _streak_results.setdefault(_ht, []).append(_hs > _aws)
+    _streak_results.setdefault(_at, []).append(_aws > _hs)
+print(f"  Streak history built for {len(_streak_results)} teams")
+
 # ── Load game_results for the window ─────────────────────────────────────────
 print(f"Loading game_results {start_date} to {today - timedelta(days=1)}...")
 cur.execute("""
@@ -217,13 +235,24 @@ for row in games_raw:
         my_info     = team_cache.get(my_team, {})
         sp_info     = pitcher_cache.get(sp_id, {}) if sp_id else {}
         opp_era     = sp_info.get("era") or opp_info.get("era") or LEAGUE_AVG_ERA
-        # Blend last-10 and season 50/50 - last-10 alone is too noisy over 10 games
         l10  = float(opp_info.get("l10_win_pct") or opp_info.get("win_pct") or 0.500)
         seas = float(opp_info.get("win_pct") or 0.500)
-        opp_win_pct = (l10 * 0.5 + seas * 0.5) if opp_info.get("l10_win_pct") else seas
+        opp_streak  = game_streak.get((opp_team, game_pk), 0)
+        opp_win_pct = blend_win_pct(seas, l10, WEIGHTS["l10_cap"],
+                                    streak=opp_streak,
+                                    streak_cap_4=WEIGHTS["streak_cap_4"],
+                                    streak_cap_6=WEIGHTS["streak_cap_6"],
+                                    streak_med_start=WEIGHTS["streak_med_start"],
+                                    streak_high_start=WEIGHTS["streak_high_start"]) if opp_info.get("l10_win_pct") else seas
         my_l10  = float(my_info.get("l10_win_pct") or my_info.get("win_pct") or 0.500)
         my_seas = float(my_info.get("win_pct") or 0.500)
-        my_win_pct = (my_l10 * 0.5 + my_seas * 0.5) if my_info.get("l10_win_pct") else my_seas
+        my_streak  = game_streak.get((my_team, game_pk), 0)
+        my_win_pct = blend_win_pct(my_seas, my_l10, WEIGHTS["l10_cap"],
+                                   streak=my_streak,
+                                   streak_cap_4=WEIGHTS["streak_cap_4"],
+                                   streak_cap_6=WEIGHTS["streak_cap_6"],
+                                   streak_med_start=WEIGHTS["streak_med_start"],
+                                   streak_high_start=WEIGHTS["streak_high_start"]) if my_info.get("l10_win_pct") else my_seas
 
         # Actual lineup wOBA + momentum scores from roster map
         actual_players  = [roster_map.get(p["name"], {}) for p in my_lineup if p.get("name")]

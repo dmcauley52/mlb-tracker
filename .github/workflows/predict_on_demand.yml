@@ -1,0 +1,44 @@
+name: On-Demand Game Prediction
+
+on:
+  workflow_dispatch:
+    inputs:
+      game_pk:
+        description: 'MLB game PK (required)'
+        required: true
+        type: string
+      home_sp:
+        description: 'Home SP full name override (leave blank if unchanged)'
+        required: false
+        default: ''
+        type: string
+      away_sp:
+        description: 'Away SP full name override (leave blank if unchanged)'
+        required: false
+        default: ''
+        type: string
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  predict:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install psycopg2-binary python-dotenv requests
+
+      - name: Run on-demand prediction
+        run: python predict_on_demand.py
+        env:
+          GAME_PK:      ${{ github.event.inputs.game_pk }}
+          HOME_SP:      ${{ github.event.inputs.home_sp }}
+          AWAY_SP:      ${{ github.event.inputs.away_sp }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}

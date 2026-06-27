@@ -5,3 +5,10 @@ supabase anon key
 eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5samtlbmVrdW1nZm56cW5jY25jIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzczMDQ2MjYsImV4cCI6MjA5Mjg4MDYyNn0.CCE4kST-yJXAA6l4Pfoxn-mntzLltUl9jUY81o56vmk
 
 Kalshi api key mlb_tracker_apikey 8e62beb3-0eef-4c1a-baa7-352f9b656d90
+
+Queries to adjust streak weights
+-- Start fading even earlier (game 3)
+UPDATE model_weights SET streak_med_start = 2 WHERE weight_set_name = 'backtest';
+
+-- Or push the hard cap to start at game 5 instead of 7
+UPDATE model_weights SET streak_high_start = 4 WHERE weight_set_name = 'backtest';
