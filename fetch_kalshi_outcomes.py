@@ -150,7 +150,13 @@ def find_kalshi_prob(home_team, away_team, game_date, events, mkt_by_event):
         ask = float(home_mkt.get("yes_ask_dollars") or 0)
         bid = float(home_mkt.get("yes_bid_dollars") or 0)
         mid = (ask + bid) / 2 if ask and bid else (ask or bid)
-        return round(1 - mid, 3) if yes_is_away else round(mid, 3)
+        prob = round(1 - mid, 3) if yes_is_away else round(mid, 3)
+        return {
+            "prob":          prob,
+            "spread":        round(ask - bid, 3) if ask and bid else None,
+            "volume":        home_mkt.get("volume_24h") or home_mkt.get("volume"),
+            "open_interest": home_mkt.get("open_interest"),
+        }
     return None
 
 # ── The Odds API ──────────────────────────────────────────────────────────
@@ -575,7 +581,11 @@ if MODE in ("morning", "pregame"):
         pick = "home" if mhp >= 0.5 else "away"
         sig  = "strong_edge" if conf >= 0.25 else "disagreement"
 
-        khp = find_kalshi_prob(home_team, away_team, game_date, events, mkt_by_event)
+        kq          = find_kalshi_prob(home_team, away_team, game_date, events, mkt_by_event)
+        khp         = kq["prob"] if kq else None
+        k_spread    = kq["spread"] if kq else None
+        k_volume    = kq["volume"] if kq else None
+        k_oi        = kq["open_interest"] if kq else None
         gap = round(mhp - khp, 3) if khp is not None else None
 
         # Cycle edge pick
@@ -607,8 +617,9 @@ if MODE in ("morning", "pregame"):
                      vegas_home_prob, vegas_away_prob, vegas_pick,
                      cycle_pick, cycle_home_score, cycle_away_score, cycle_home_prob, cycle_away_prob,
                      prob_gap, signal_type, lineup_source, game_time_utc,
-                     home_sp_name, away_sp_name, predicted_at)
-                    VALUES (%s,%s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s, %s,%s,%s, %s,%s,%s,%s,%s, %s,%s,%s,%s, %s,%s, NOW())
+                     home_sp_name, away_sp_name,
+                     kalshi_spread, kalshi_volume, kalshi_open_interest, predicted_at)
+                    VALUES (%s,%s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s, %s,%s,%s, %s,%s,%s,%s,%s, %s,%s,%s,%s, %s,%s, %s,%s,%s, NOW())
                     ON CONFLICT (game_pk, game_date) DO UPDATE SET
                         model_home_prob   = EXCLUDED.model_home_prob,
                         model_away_prob   = EXCLUDED.model_away_prob,
@@ -628,6 +639,9 @@ if MODE in ("morning", "pregame"):
                         lineup_source     = EXCLUDED.lineup_source,
                         home_sp_name      = COALESCE(EXCLUDED.home_sp_name, kalshi_tracker.home_sp_name),
                         away_sp_name      = COALESCE(EXCLUDED.away_sp_name, kalshi_tracker.away_sp_name),
+                        kalshi_spread        = COALESCE(EXCLUDED.kalshi_spread,        kalshi_tracker.kalshi_spread),
+                        kalshi_volume        = COALESCE(EXCLUDED.kalshi_volume,        kalshi_tracker.kalshi_volume),
+                        kalshi_open_interest = COALESCE(EXCLUDED.kalshi_open_interest, kalshi_tracker.kalshi_open_interest),
                         predicted_at      = EXCLUDED.predicted_at
                     WHERE kalshi_tracker.predicted_at IS NULL
                        OR kalshi_tracker.predicted_at < EXCLUDED.predicted_at
@@ -640,6 +654,7 @@ if MODE in ("morning", "pregame"):
                     round(1 - cycle_home_p, 3) if cycle_home_p is not None else None,
                     gap, sig, g["lineup_source"], g["game_time_utc"],
                     g["home_sp_name"], g["away_sp_name"],
+                    k_spread, k_volume, k_oi,
                 ))
                 logged += 1
                 kalshi_str = f"kalshi={khp}" if khp is not None else "kalshi=n/a"

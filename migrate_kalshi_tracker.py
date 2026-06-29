@@ -70,6 +70,19 @@ for col, typedef in [
     """)
 
 conn.commit()
+
+# Add Kalshi liquidity columns (morning snapshot) — used by analyze_divergence.py
+# to filter to tradeable markets (a "5pp edge" behind a 6pp spread is nothing).
+for col, typedef in [
+    ("kalshi_spread",        "NUMERIC(5,3)"),  # yes ask - bid, dollars, on matched market
+    ("kalshi_volume",        "INTEGER"),       # 24h contract volume
+    ("kalshi_open_interest", "INTEGER"),       # resting open interest
+]:
+    cur.execute(f"""
+        ALTER TABLE kalshi_tracker ADD COLUMN IF NOT EXISTS {col} {typedef};
+    """)
+
+conn.commit()
 cur.close()
 conn.close()
-print("kalshi_tracker table ready (cycle prob columns added if missing)")
+print("kalshi_tracker table ready (cycle prob + kalshi liquidity columns added if missing)")
