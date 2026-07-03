@@ -3,5 +3,7 @@
 *.pem
 *.txt
 node_modules/
+*.pyc
+__pycache__/
 
 .vercel
