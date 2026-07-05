@@ -83,6 +83,19 @@ for col, typedef in [
     """)
 
 conn.commit()
+
+# Add Pinnacle columns — second sharp anchor alongside DraftKings (lower vig,
+# not visible to US retail, so Kalshi-vs-Pinnacle divergence is the more
+# informative read than Kalshi-vs-DK).
+for col, typedef in [
+    ("pinnacle_home_prob", "NUMERIC(5,3)"),
+    ("pinnacle_away_prob", "NUMERIC(5,3)"),
+]:
+    cur.execute(f"""
+        ALTER TABLE kalshi_tracker ADD COLUMN IF NOT EXISTS {col} {typedef};
+    """)
+
+conn.commit()
 cur.close()
 conn.close()
-print("kalshi_tracker table ready (cycle prob + kalshi liquidity columns added if missing)")
+print("kalshi_tracker table ready (cycle prob + kalshi liquidity + pinnacle columns added if missing)")

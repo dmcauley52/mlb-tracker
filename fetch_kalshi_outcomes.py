@@ -120,6 +120,18 @@ TEAM_ABBRS = {
 }
 
 # ── Kalshi market lookup ───────────────────────────────────────────────────
+def _mkt_num(mkt, *keys):
+    """First present numeric field; *_fp fields arrive as strings ('366.67')."""
+    for k in keys:
+        v = mkt.get(k)
+        if v not in (None, ""):
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                pass
+    return None
+
+
 def find_kalshi_prob(home_team, away_team, game_date, events, mkt_by_event):
     home_abbrs = TEAM_ABBRS.get(home_team, [])
     away_abbrs = TEAM_ABBRS.get(away_team, [])
@@ -154,14 +166,15 @@ def find_kalshi_prob(home_team, away_team, game_date, events, mkt_by_event):
         return {
             "prob":          prob,
             "spread":        round(ask - bid, 3) if ask and bid else None,
-            "volume":        home_mkt.get("volume_24h") or home_mkt.get("volume"),
-            "open_interest": home_mkt.get("open_interest"),
+            "volume":        _mkt_num(home_mkt, "volume_24h_fp", "volume_24h", "volume_fp", "volume"),
+            "open_interest": _mkt_num(home_mkt, "open_interest_fp", "open_interest"),
         }
     return None
 
 # ── The Odds API ──────────────────────────────────────────────────────────
 def fetch_vegas_odds():
-    """Returns {(home_team, away_team): home_prob} using DraftKings h2h lines."""
+    """Returns {(home_team, away_team, et_date): {book: home_prob}} from h2h lines.
+    Books: 'draftkings' (us region) and 'pinnacle' (eu region, sharp anchor)."""
     if not ODDS_API_KEY:
         return {}
     try:
@@ -169,9 +182,9 @@ def fetch_vegas_odds():
             "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds",
             params={
                 "apiKey":   ODDS_API_KEY,
-                "regions":  "us",
+                "regions":  "us,eu",
                 "markets":  "h2h",
-                "bookmakers": "draftkings",
+                "bookmakers": "draftkings,pinnacle",
                 "oddsFormat": "american",
             },
             timeout=10,
@@ -181,6 +194,17 @@ def fetch_vegas_odds():
         for game in r.json():
             home = game.get("home_team", "")
             away = game.get("away_team", "")
+            # commence_time is UTC; MLB game_date follows the US-Eastern
+            # calendar date. Fixed -4h is safe: no MLB game starts in the
+            # 11pm-midnight ET window where EDT/EST drift could flip the date.
+            et_date = ""
+            ct = game.get("commence_time", "")
+            try:
+                et_date = (datetime.strptime(ct[:19], "%Y-%m-%dT%H:%M:%S")
+                           - timedelta(hours=4)).strftime("%Y-%m-%d")
+            except ValueError:
+                pass
+            quote = {}
             for bm in game.get("bookmakers", []):
                 for mkt in bm.get("markets", []):
                     if mkt.get("key") != "h2h":
@@ -195,24 +219,29 @@ def fetch_vegas_odds():
                         probs[outcome["name"]] = p
                     total = sum(probs.values())
                     if total > 0:
-                        home_prob = round(probs.get(home, 0) / total, 3)
-                        result[(home, away)] = home_prob
-        print(f"  Vegas odds: {len(result)} games")
+                        quote[bm.get("key")] = round(probs.get(home, 0) / total, 3)
+            if quote:
+                result[(home, away, et_date)] = quote
+        n_pin = sum(1 for q in result.values() if "pinnacle" in q)
+        print(f"  Vegas odds: {len(result)} games ({n_pin} with pinnacle)")
         return result
     except Exception as e:
         print(f"  Odds API fetch failed: {e}")
         return {}
 
-def find_vegas_prob(home_team, away_team, vegas_odds):
-    """Match full team names to Odds API entries (fuzzy last-word match)."""
-    direct = vegas_odds.get((home_team, away_team))
+def find_vegas_prob(home_team, away_team, game_date, vegas_odds):
+    """Match full team names + game date to Odds API entries (fuzzy last-word match).
+    Returns {book: home_prob} or None. Date must match exactly — a missing quote
+    beats yesterday's line on a consecutive-day same-matchup game."""
+    date_str = str(game_date)
+    direct = vegas_odds.get((home_team, away_team, date_str))
     if direct is not None:
         return direct
     home_last = home_team.split()[-1].lower()
     away_last = away_team.split()[-1].lower()
-    for (h, a), prob in vegas_odds.items():
-        if home_last in h.lower() and away_last in a.lower():
-            return prob
+    for (h, a, d), quote in vegas_odds.items():
+        if d == date_str and home_last in h.lower() and away_last in a.lower():
+            return quote
     return None
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -603,8 +632,20 @@ if MODE in ("morning", "pregame"):
 
         # ── MORNING: insert row for every game (need Vegas for all games) ──
         if MODE == "morning":
-            vhp = find_vegas_prob(home_team, away_team, vegas_odds)
+            # Guard for manual re-runs: never overwrite the morning snapshot with
+            # in-game prices. The scheduled 14:00 UTC run always precedes first pitch.
+            gtime = g.get("game_time_utc")
+            try:
+                if gtime and now_utc >= datetime.fromisoformat(gtime.replace("Z", "+00:00")):
+                    print(f"  Morning: {away_team} @ {home_team}  skipped (already started)")
+                    continue
+            except ValueError:
+                pass
+            vq  = find_vegas_prob(home_team, away_team, game_date, vegas_odds)
+            vhp = vq.get("draftkings") if vq else None
+            php = vq.get("pinnacle")   if vq else None
             vap   = round(1 - vhp, 3) if vhp is not None else None
+            pap   = round(1 - php, 3) if php is not None else None
             vpick = ("home" if vhp >= 0.5 else "away") if vhp is not None else None
             kap   = round(1 - khp, 3) if khp is not None else None
             kpick = ("home" if khp >= 0.5 else "away") if khp is not None else None
@@ -615,11 +656,12 @@ if MODE in ("morning", "pregame"):
                      model_home_prob, model_away_prob, model_pick, model_confidence,
                      kalshi_home_prob, kalshi_away_prob, kalshi_pick,
                      vegas_home_prob, vegas_away_prob, vegas_pick,
+                     pinnacle_home_prob, pinnacle_away_prob,
                      cycle_pick, cycle_home_score, cycle_away_score, cycle_home_prob, cycle_away_prob,
                      prob_gap, signal_type, lineup_source, game_time_utc,
                      home_sp_name, away_sp_name,
                      kalshi_spread, kalshi_volume, kalshi_open_interest, predicted_at)
-                    VALUES (%s,%s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s, %s,%s,%s, %s,%s,%s,%s,%s, %s,%s,%s,%s, %s,%s, %s,%s,%s, NOW())
+                    VALUES (%s,%s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s, %s,%s,%s, %s,%s, %s,%s,%s,%s,%s, %s,%s,%s,%s, %s,%s, %s,%s,%s, NOW())
                     ON CONFLICT (game_pk, game_date) DO UPDATE SET
                         model_home_prob   = EXCLUDED.model_home_prob,
                         model_away_prob   = EXCLUDED.model_away_prob,
@@ -629,6 +671,8 @@ if MODE in ("morning", "pregame"):
                         vegas_home_prob   = COALESCE(EXCLUDED.vegas_home_prob,  kalshi_tracker.vegas_home_prob),
                         vegas_away_prob   = COALESCE(EXCLUDED.vegas_away_prob,  kalshi_tracker.vegas_away_prob),
                         vegas_pick        = COALESCE(EXCLUDED.vegas_pick,       kalshi_tracker.vegas_pick),
+                        pinnacle_home_prob = COALESCE(EXCLUDED.pinnacle_home_prob, kalshi_tracker.pinnacle_home_prob),
+                        pinnacle_away_prob = COALESCE(EXCLUDED.pinnacle_away_prob, kalshi_tracker.pinnacle_away_prob),
                         cycle_pick        = COALESCE(EXCLUDED.cycle_pick,       kalshi_tracker.cycle_pick),
                         cycle_home_score  = COALESCE(EXCLUDED.cycle_home_score, kalshi_tracker.cycle_home_score),
                         cycle_away_score  = COALESCE(EXCLUDED.cycle_away_score, kalshi_tracker.cycle_away_score),
@@ -650,6 +694,7 @@ if MODE in ("morning", "pregame"):
                     mhp, round(1-mhp,3), pick, conf,
                     khp, kap, kpick,
                     vhp, vap, vpick,
+                    php, pap,
                     cpick, cycle_home_sc, cycle_away_sc, cycle_home_p,
                     round(1 - cycle_home_p, 3) if cycle_home_p is not None else None,
                     gap, sig, g["lineup_source"], g["game_time_utc"],
@@ -659,8 +704,9 @@ if MODE in ("morning", "pregame"):
                 logged += 1
                 kalshi_str = f"kalshi={khp}" if khp is not None else "kalshi=n/a"
                 vegas_str  = f"vegas={vhp}"  if vhp is not None else "vegas=n/a"
+                pin_str    = f"pin={php}"    if php is not None else "pin=n/a"
                 cycle_str  = f"cycle={cpick}" if cpick is not None else "cycle=n/a"
-                print(f"  Morning: {away_team} @ {home_team}  {kalshi_str}  {vegas_str}  {cycle_str}")
+                print(f"  Morning: {away_team} @ {home_team}  {kalshi_str}  {vegas_str}  {pin_str}  {cycle_str}")
             except Exception as e:
                 print(f"  ERR {home_team}: {e}")
 
