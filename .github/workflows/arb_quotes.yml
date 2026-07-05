@@ -1,0 +1,35 @@
+name: Arb Window Logger
+
+# Polls executable Kalshi + Polymarket top-of-book quotes every 20 min during
+# MLB game hours and appends to arb_quotes. Measurement only — counts how often
+# true cross-venue arb windows (price sum < $1 after fees) actually open.
+# 20-min cadence keeps this ~1,100 Actions minutes/month (private-repo budget).
+
+on:
+  workflow_dispatch: {}   # allow manual trigger for testing
+
+  schedule:
+    - cron: '*/20 15-23 * * *'   # 15:00-23:59 UTC — pregame through evening slates
+    - cron: '*/20 0-2 * * *'     # 00:00-02:59 UTC — West Coast night games
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install psycopg2-binary python-dotenv requests
+
+      - name: Poll arb quotes
+        run: python fetch_arb_quotes.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
