@@ -200,7 +200,14 @@ def poly_quotes(home_team, away_team, game_dt, events):
             continue
         if et_date(ev_dt) != gdate:
             continue
-        candidates.append((abs((ev_dt - game_dt).total_seconds()), ev))
+        diff = abs((ev_dt - game_dt).total_seconds())
+        # Doubleheaders: same-date matching alone assigned game 1's lone Poly
+        # event to game 2 as well (2026-07-07 STL/MIL — game 1's resolved market
+        # logged against game 2's book as a phantom 45% "arb"). Only trust an
+        # event whose startTime is near this game's first pitch.
+        if diff > 3 * 3600:
+            continue
+        candidates.append((diff, ev))
     if not candidates:
         return None
     ev = min(candidates)[1]
