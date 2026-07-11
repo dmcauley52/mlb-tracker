@@ -2060,8 +2060,8 @@
             setTimeout(chunk,0);
           });
           if(abortRef.current)return;
-          // Count wins BEFORE sorting (pairing is index-aligned from the sim loop)
-          const myWins=myRunsArr.filter((r,i)=>r>oppRunsArr[i]).length;
+          // Count wins BEFORE sorting (pairing is index-aligned from the sim loop); residual ties count half
+          const myWins=myRunsArr.reduce((s,r,i)=>s+(r>oppRunsArr[i]?1:r===oppRunsArr[i]?0.5:0),0);
           myRunsArr.sort((a,b)=>a-b);oppRunsArr.sort((a,b)=>a-b);
           const pct=(arr,p)=>arr[Math.floor(arr.length*p)];
           // Convert per-inning means into whole-run linescore:
