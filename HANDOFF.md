@@ -1,6 +1,6 @@
 # Handoff — Kalshi prediction vs. arbitrage investigation
 
-_Last updated 2026-06-27. This note travels with the repo so work can resume on any machine._
+_Last updated 2026-07-11. This note travels with the repo so work can resume on any machine._
 
 ## Why this exists
 Started from an mlb-arb-bot roadmap flag: the upstream model that populates
@@ -28,6 +28,30 @@ winners. `analyze_divergence.py` runs a fee-aware EV backtest.
   only ~29 bets, dominated by phantom quotes (e.g. a game with Vegas 9% vs Kalshi
   50% — a stale/illiquid Kalshi price you could never actually fill).
 - Kalshi and Vegas otherwise agree to ~1pp (mean |divergence| = 0.010).
+
+## Checkpoint results — 2026-07-11 (the ~2-week re-run from NEXT STEP below)
+`analyze_divergence.py` now supports `MAX_SPREAD` / `MIN_VOLUME` / `MIN_OI` env filters.
+Liquidity coverage: 152 usable games since 6/29; volume is NULL on untraded markets,
+so any volume floor selects the genuinely traded set (73 games, median volume ~34k).
+
+- **Tradeable games (vol ≥ 100, n=73): divergence collapses.** mean |kalshi−vegas| =
+  0.006, max = 0.034. One bet qualified at EDGE=0.03 — it lost (ROI −100%). Zero games
+  at 0.05/0.08. The Kalshi fee (~1.75¢ at p=0.5) exceeds nearly the entire observed
+  divergence range, so there is no room even before slippage.
+- The full-dataset "+38% ROI at EDGE=0.03" comes entirely from pre-liquidity-era rows —
+  consistent with the phantom-quote hypothesis. On every game where tradability is
+  verifiable, the mispricing does not exist.
+- **Model re-validated on 923 games** (was 747): unchanged — no info beyond kalshi
+  (coef +0.25, p=0.13) or vegas (coef +0.21, p=0.22); market right 51.3% on
+  disagreements. Note this still pools the pre-2026-07-10 sim engine (run-bias fix
+  `2e6e2e2` landed 7/10); a fixed-engine verdict needs forward data or a historical
+  re-sim. Cycle coef is significantly *negative* (−0.45, p=0.036) — an anti-signal,
+  single-test caveat applies.
+- **Verdict per step 3: Kalshi-vs-Vegas arb does not have legs on tradeable games.**
+  n=73 is only two weeks, so this is provisional — but the mlb-arb-bot performance
+  report now has a "Cross-Venue Arb Watch" section running this same filtered backtest
+  as data accrues, so no manual re-run is needed. If max divergence keeps failing to
+  clear the fee floor as n grows, abandon formally.
 
 ## NEXT STEP (time-gated — nothing to do until data accrues)
 1. `fetch_kalshi_outcomes.py` now logs `kalshi_spread`, `kalshi_volume`,

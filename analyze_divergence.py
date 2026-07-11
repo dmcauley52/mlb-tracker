@@ -14,6 +14,11 @@ Env:  DATABASE_URL  (required)
       EDGE   minimum vegas_prob - kalshi_price to place a bet (default 0.03)
       FEE    'kalshi' (default, 0.07*p*(1-p) per contract) | a flat number | '0'
       SEASON optional season filter
+      MAX_SPREAD  keep only games with kalshi_spread <= this (liquidity data is
+                  forward-only from 2026-06-29; setting any liquidity filter
+                  drops rows without it)
+      MIN_VOLUME  keep only games with kalshi_volume >= this
+      MIN_OI      keep only games with kalshi_open_interest >= this
 """
 import os, math, statistics
 import psycopg2
@@ -24,6 +29,9 @@ load_dotenv()
 EDGE   = float(os.getenv("EDGE", "0.03"))
 SEASON = os.getenv("SEASON")
 FEE    = os.getenv("FEE", "kalshi")
+MAX_SPREAD = os.getenv("MAX_SPREAD")
+MIN_VOLUME = os.getenv("MIN_VOLUME")
+MIN_OI     = os.getenv("MIN_OI")
 
 
 def kalshi_fee(price):
@@ -41,6 +49,12 @@ def fetch():
     params = []
     if SEASON:
         where += " AND season = %s"; params.append(int(SEASON))
+    if MAX_SPREAD is not None:
+        where += " AND kalshi_spread <= %s"; params.append(float(MAX_SPREAD))
+    if MIN_VOLUME is not None:
+        where += " AND kalshi_volume >= %s"; params.append(float(MIN_VOLUME))
+    if MIN_OI is not None:
+        where += " AND kalshi_open_interest >= %s"; params.append(float(MIN_OI))
     cur.execute(f"""
         SELECT home_team, away_team, game_date,
                kalshi_home_prob, vegas_home_prob, actual_winner
@@ -59,8 +73,14 @@ def main():
     rows = fetch()
     if not rows:
         print("No both-priced resolved rows."); return
+    liq = "".join(
+        f"  {name}={val}" for name, val in
+        (("MAX_SPREAD", MAX_SPREAD), ("MIN_VOLUME", MIN_VOLUME), ("MIN_OI", MIN_OI))
+        if val is not None
+    )
     print(f"\nBoth-priced resolved games: {len(rows)}"
-          + (f"  (season {SEASON})" if SEASON else "") + f"\nEDGE={EDGE}  FEE={FEE}\n")
+          + (f"  (season {SEASON})" if SEASON else "")
+          + f"\nEDGE={EDGE}  FEE={FEE}{liq}\n")
 
     # ── divergence distribution ──
     divs = [abs(float(r["kalshi_home_prob"]) - float(r["vegas_home_prob"])) for r in rows]
