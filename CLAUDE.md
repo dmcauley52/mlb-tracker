@@ -136,6 +136,14 @@ Tunable weights live in the `model_weights` table (rows `'live'` and `'backtest'
 - `buildOpponentLineup(players, predCache)` — sorts by `typicalSpot` (historical batting order)
 - `fetchUpcomingSchedule(teamName)` — fetches 14-day schedule + SP details + standings
 
+## Calibration Invariant (mandatory for any predictive model/sim change)
+Whenever you build or modify anything that predicts runs, wins, or probabilities, run a **conservation check before shipping**: league-average inputs must produce league-average outputs.
+- League-average lineup vs league-average SP → ~4.6 runs/team (2026); identical teams → 50% win prob (probs for both sides must sum to ~1 — watch for ties counted as losses)
+- Per-game outputs always look plausible; bias is only visible in aggregate. Score against actuals (`game_predictions` has `mc_*_run_err` / `actual_*` columns) or sim a league-average matchup — never verify by eyeballing single games
+- Precedent: the MC engine ran 2026-05-06 → 07-10 with a −1.88 runs/team bias across 6 bugs (batter dropped on doubles, median stored as runs, ties as losses, SP over-leverage). The error columns held the evidence for 2 months; nobody aggregated them. Fixed in commit `2e6e2e2`; calibration harness pattern in `validate_team_totals.py`
+- The Python engine (`prediction_engine.py`) and JS twin (`index.html` sim functions) must stay in sync — port drift caused one of the six bugs. If you change one, change and re-verify both (the JS functions can be extracted and run under Node)
+- `game_predictions` rows before 2026-07-11 are old-engine — don't mix eras in calibration studies
+
 ## Common Fixes
 - **ON CONFLICT error on pitcher insert**: missing unique constraint → `ALTER TABLE pitcher_gamelogs ADD CONSTRAINT pitcher_gamelogs_player_id_game_date_key UNIQUE (player_id, game_date);`
 - **Env vars not injecting**: check `vercel.json` for `%SB_URL%` replacement config; values starting with `%` are treated as unset and fall back to localStorage
