@@ -1927,7 +1927,16 @@
           }
         }
         coverage.push({name:name||'—', source});
-        dists.push(sp?applySpAdjustment(dist||LEAGUE_AVG,sp):(dist||LEAGUE_AVG));
+        const base=dist||LEAGUE_AVG;
+        if(sp){
+          // SP pitches ~6 of 9 innings; bullpen ≈ league-average, so blend
+          // 65% adjusted / 35% unadjusted (mirrors prediction_engine.py)
+          const adj=applySpAdjustment(base,sp), w=0.65, blended={...base};
+          ['hr','trip','dbl','s1b','bb','k','out'].forEach(k2=>{blended[k2]=w*adj[k2]+(1-w)*base[k2];});
+          dists.push(blended);
+        } else {
+          dists.push(base);
+        }
       }
       return {dists, coverage};
     }
