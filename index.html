@@ -1854,9 +1854,18 @@
         const hh=simulateHalfInning(homeDists,hB,hRun,hRbi);
         hInnings.push(hh.innRuns); hB=hh.nextBatter;
       }
+      let homeRuns=hInnings.reduce((a,b)=>a+b,0);
+      let awayRuns=aInnings.reduce((a,b)=>a+b,0);
+      let extras=0;
+      while(homeRuns===awayRuns&&extras<8){  // extra innings (rare residual ties split in win count)
+        const ah=simulateHalfInning(awayDists,aB,aRun,aRbi);
+        awayRuns+=ah.innRuns; aB=ah.nextBatter;
+        const hh=simulateHalfInning(homeDists,hB,hRun,hRbi);
+        homeRuns+=hh.innRuns; hB=hh.nextBatter;
+        extras++;
+      }
       return{
-        homeRuns: hInnings.reduce((a,b)=>a+b,0),
-        awayRuns: aInnings.reduce((a,b)=>a+b,0),
+        homeRuns, awayRuns,
         hInnings, aInnings,
         hRun, hRbi, aRun, aRbi,
       };
