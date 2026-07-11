@@ -1756,13 +1756,13 @@
       if(!dist||!sp) return dist;
       const kMult  = Math.min(2.0,Math.max(0.5,(sp.k9||LEAGUE_AVG_K9)/LEAGUE_AVG_K9));
       // eraAdj < 1 = better-than-avg SP → reduce hits; >1 = worse → inflate hits
-      // Clamp tightly so we never blow up probabilities
-      const eraAdj = Math.min(1.25,Math.max(0.75,(sp.era||LEAGUE_AVG_ERA)/LEAGUE_AVG_ERA));
+      // Caps calibrated with the bullpen blend in buildDistributions (mirrors prediction_engine.py)
+      const eraAdj = Math.min(1.12,Math.max(0.88,(sp.era||LEAGUE_AVG_ERA)/LEAGUE_AVG_ERA));
       const newK   = Math.min(0.40,dist.k*kMult);
       const kDelta = newK-dist.k;
       const hitSum = dist.hr+dist.trip+dist.dbl+dist.s1b;
-      // Remove k-increase delta from hits proportionally
-      const hitScale = hitSum>0?Math.max(0.5,1-kDelta/Math.max(hitSum,0.01)):1;
+      // K change exchanges with balls in play; only ~35% of those are hits
+      const hitScale = hitSum>0?Math.max(0.5,1-0.35*kDelta/Math.max(hitSum,0.01)):1;
       // ERA scales all positive events, clamped so total never exceeds 0.85
       const rawHr  = dist.hr  *hitScale*eraAdj;
       const rawTrip= dist.trip*hitScale*eraAdj;
@@ -2074,8 +2074,8 @@
           const hasAPI=myCoverage.filter(c=>c.source==='mlb-api').length;
           const hasLeague=myCoverage.filter(c=>c.source==='league-avg'||c.source==='no-id'||c.source==='mlb-api-fail').length;
           setSimResult({
-            myMedian:+(myRunsArr.reduce((a,b)=>a+b,0)/TOTAL).toFixed(1),myP10:pct(myRunsArr,0.1),myP90:pct(myRunsArr,0.9),
-            oppMedian:+(oppRunsArr.reduce((a,b)=>a+b,0)/TOTAL).toFixed(1),oppP10:pct(oppRunsArr,0.1),oppP90:pct(oppRunsArr,0.9),
+            myMean:+(myRunsArr.reduce((a,b)=>a+b,0)/TOTAL).toFixed(1),myP10:pct(myRunsArr,0.1),myP90:pct(myRunsArr,0.9),
+            oppMean:+(oppRunsArr.reduce((a,b)=>a+b,0)/TOTAL).toFixed(1),oppP10:pct(oppRunsArr,0.1),oppP90:pct(oppRunsArr,0.9),
             winProb:+(myWins/TOTAL).toFixed(3),
             playerRows:makeRows(myDists,myRSum,myRbiSum),playerNames:myNames,
             oppRows:makeRows(oppDists,oppRSum,oppRbiSum),oppNames,
@@ -2143,13 +2143,13 @@
                 <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:24,marginBottom:10}}>
                   <div style={{textAlign:"center"}}>
                     <div style={{fontSize:11,color:"#64748b",marginBottom:2}}>{myTeam}</div>
-                    <div style={{fontSize:32,fontWeight:800,color:"#22c55e",lineHeight:1}}>{simResult.myMedian}</div>
+                    <div style={{fontSize:32,fontWeight:800,color:"#22c55e",lineHeight:1}}>{simResult.myMean}</div>
                     <div style={{fontSize:10,color:"#475569",marginTop:2}}>{simResult.myP10}–{simResult.myP90} range</div>
                   </div>
                   <div style={{fontSize:22,color:"#334155",fontWeight:700}}>—</div>
                   <div style={{textAlign:"center"}}>
                     <div style={{fontSize:11,color:"#64748b",marginBottom:2}}>{oppName}</div>
-                    <div style={{fontSize:32,fontWeight:800,color:"#ef4444",lineHeight:1}}>{simResult.oppMedian}</div>
+                    <div style={{fontSize:32,fontWeight:800,color:"#ef4444",lineHeight:1}}>{simResult.oppMean}</div>
                     <div style={{fontSize:10,color:"#475569",marginTop:2}}>{simResult.oppP10}–{simResult.oppP90} range</div>
                   </div>
                 </div>
@@ -2177,8 +2177,8 @@
                     </thead>
                     <tbody>
                       {[
-                        {label:myTeam,   medians:simResult.myInnMedians,  total:simResult.myMedian,  color:ACCENT},
-                        {label:oppName,  medians:simResult.oppInnMedians, total:simResult.oppMedian, color:"#94a3b8"},
+                        {label:myTeam,   medians:simResult.myInnMedians,  total:simResult.myMean,  color:ACCENT},
+                        {label:oppName,  medians:simResult.oppInnMedians, total:simResult.oppMean, color:"#94a3b8"},
                       ].map(({label,medians,total,color})=>(
                         <tr key={label}>
                           <td style={{color,fontWeight:700,padding:"4px 6px",fontSize:10,overflow:"hidden",whiteSpace:"nowrap",maxWidth:80,textOverflow:"ellipsis"}}
