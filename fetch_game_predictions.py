@@ -174,8 +174,8 @@ def main():
         # ── Monte Carlo ───────────────────────────────────────────────────────
         print(f"  Running {SIM_ITERATIONS:,} simulations…")
         mc = run_monte_carlo(home_dists, away_dists)
-        print(f"  MC: {g['home_team']} {mc['home_median']} ({mc['home_p10']}–{mc['home_p90']}) "
-              f"vs {g['away_team']} {mc['away_median']} ({mc['away_p10']}–{mc['away_p90']}) "
+        print(f"  MC: {g['home_team']} {mc['home_mean']} ({mc['home_p10']}–{mc['home_p90']}) "
+              f"vs {g['away_team']} {mc['away_mean']} ({mc['away_p10']}–{mc['away_p90']}) "
               f"home win {mc['home_win_prob']:.1%}")
 
         # ── wOBA model ────────────────────────────────────────────────────────
@@ -243,7 +243,7 @@ def main():
             g["home_sp_name"], g["away_sp_name"],
             home_sp_era, away_sp_era,
             home_win_pct, away_win_pct,
-            mc["home_median"], mc["away_median"],
+            mc["home_mean"], mc["away_mean"],
             mc["home_p10"], mc["home_p90"],
             mc["away_p10"], mc["away_p90"],
             mc["home_win_prob"],

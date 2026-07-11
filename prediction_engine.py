@@ -315,12 +315,16 @@ def compute_distribution(games):
 
 
 def apply_sp_adjustment(dist, sp_era, sp_k9):
+    # Caps calibrated so a league-avg lineup sims to ~3.4 runs vs an elite SP
+    # (2.50 ERA / 11 K9) and ~5.9 vs a bad one (5.80 / 6.5) after the bullpen
+    # blend in build_distributions; the old 0.75-1.25 caps compounded to 1.4/11.5.
     k_mult    = min(2.0, max(0.5, sp_k9 / LEAGUE_AVG_K9))
-    era_adj   = min(1.25, max(0.75, sp_era / LEAGUE_AVG_ERA))
+    era_adj   = min(1.12, max(0.88, sp_era / LEAGUE_AVG_ERA))
     new_k     = min(0.40, dist["k"] * k_mult)
     k_delta   = new_k - dist["k"]
     hit_sum   = dist["hr"] + dist["trip"] + dist["dbl"] + dist["s1b"]
-    hit_scale = max(0.5, 1 - k_delta / max(hit_sum, 0.01)) if hit_sum > 0 else 1
+    # K change exchanges with balls in play; only ~35% of those are hits
+    hit_scale = max(0.5, 1 - 0.35 * k_delta / max(hit_sum, 0.01)) if hit_sum > 0 else 1
     raw = {
         "hr":   dist["hr"]   * hit_scale * era_adj,
         "trip": dist["trip"] * hit_scale * era_adj,
@@ -337,6 +341,12 @@ def apply_sp_adjustment(dist, sp_era, sp_k9):
     return raw
 
 
+# The SP pitches ~6 of 9 innings; the bullpen (≈ league-average) covers the
+# rest. Applying the SP adjustment to the full game over-leverages elite/bad
+# starters (league-avg lineup vs 2.50-ERA SP simmed to 1.4 runs, win prob 1%).
+SP_INNINGS_WEIGHT = 0.65
+
+
 def build_distributions(player_names, games_map, sp_era=None, sp_k9=None):
     dists = []
     for i in range(9):
@@ -347,7 +357,9 @@ def build_distributions(player_names, games_map, sp_era=None, sp_k9=None):
         if dist is None:
             dist = dict(LEAGUE_AVG_DIST)
         if sp_era is not None and sp_k9 is not None:
-            dist = apply_sp_adjustment(dist, sp_era, sp_k9)
+            adj = apply_sp_adjustment(dist, sp_era, sp_k9)
+            w = SP_INNINGS_WEIGHT
+            dist = {k: w * adj[k] + (1 - w) * dist[k] for k in adj}
         dists.append(dist)
     return dists
 
@@ -378,16 +390,26 @@ def simulate_half_inning(dists, start):
     while outs < 3:
         outcome = sample_pa(dists[bIdx % 9])
         bIdx += 1
+        if outcome == "out" and random.random() < 0.02:
+            outcome = "s1b"  # reached on error — advances like a single
         if outcome == "hr":
             runs += 1 + sum(b); b = [False, False, False]
         elif outcome == "trip":
             runs += sum(b); b = [False, False, True]
         elif outcome == "dbl":
             runs += (1 if b[1] else 0) + (1 if b[2] else 0)
-            b = [False, False, b[0]]
+            if b[0] and random.random() < 0.40:
+                runs += 1                       # 1B scores on a double 40%
+                b = [False, True, False]
+            else:
+                b = [False, True, b[0]]         # batter to 2B, 1B to 3B
         elif outcome == "s1b":
-            runs += (1 if b[2] else 0) + (1 if b[1] and random.random() < 0.60 else 0)
-            b = [True, b[0] and not b[1], False]
+            if b[2]: runs += 1
+            adv3 = False
+            if b[1]:
+                if random.random() < 0.60: runs += 1
+                else: adv3 = True               # 2B holds at 3B
+            b = [True, b[0], adv3]
         elif outcome == "bb":
             if b[0] and b[1] and b[2]: runs += 1
             elif b[0] and b[1]: b = [True, True, True]
@@ -398,6 +420,10 @@ def simulate_half_inning(dists, start):
         else:
             if b[0] and outs < 2 and random.random() < 0.15:
                 outs += 2; b[0] = False
+            elif any(b) and outs < 2 and random.random() < 0.30:
+                if b[2]: runs += 1              # productive out: runners up one base
+                b = [False, b[0], b[1]]
+                outs += 1
             else:
                 outs += 1
     return runs, bIdx % 9
@@ -412,6 +438,12 @@ def simulate_game(home_dists, away_dists):
         hr, h_bat = simulate_half_inning(home_dists, h_bat)
         a_inn.append(ar); h_inn.append(hr)
         h_runs += hr; a_runs += ar
+    extras = 0
+    while h_runs == a_runs and extras < 8:   # extra innings (rare residual ties split in run_monte_carlo)
+        ar, a_bat = simulate_half_inning(away_dists, a_bat)
+        hr, h_bat = simulate_half_inning(home_dists, h_bat)
+        h_runs += hr; a_runs += ar
+        extras += 1
     return h_runs, a_runs, h_inn, a_inn
 
 
@@ -420,17 +452,23 @@ def run_monte_carlo(home_dists, away_dists, n=10_000):
     away_totals = []
     home_inn_acc = [0.0] * 9
     away_inn_acc = [0.0] * 9
-    home_wins = 0
+    home_wins = 0.0
     for _ in range(n):
         hr, ar, hi, ai = simulate_game(home_dists, away_dists)
         if hr > ar:
             home_wins += 1
+        elif hr == ar:
+            home_wins += 0.5
         home_totals.append(hr); away_totals.append(ar)
         for i in range(9):
             home_inn_acc[i] += hi[i]; away_inn_acc[i] += ai[i]
+    home_mean = sum(home_totals) / n
+    away_mean = sum(away_totals) / n
     home_totals.sort(); away_totals.sort()
     pct = lambda arr, p: arr[int(len(arr) * p)]
     return {
+        "home_mean":      round(home_mean, 2),
+        "away_mean":      round(away_mean, 2),
         "home_median":    pct(home_totals, 0.5),
         "home_p10":       pct(home_totals, 0.1),
         "home_p90":       pct(home_totals, 0.9),
