@@ -2074,8 +2074,8 @@
           const hasAPI=myCoverage.filter(c=>c.source==='mlb-api').length;
           const hasLeague=myCoverage.filter(c=>c.source==='league-avg'||c.source==='no-id'||c.source==='mlb-api-fail').length;
           setSimResult({
-            myMedian:pct(myRunsArr,0.5),myP10:pct(myRunsArr,0.1),myP90:pct(myRunsArr,0.9),
-            oppMedian:pct(oppRunsArr,0.5),oppP10:pct(oppRunsArr,0.1),oppP90:pct(oppRunsArr,0.9),
+            myMedian:+(myRunsArr.reduce((a,b)=>a+b,0)/TOTAL).toFixed(1),myP10:pct(myRunsArr,0.1),myP90:pct(myRunsArr,0.9),
+            oppMedian:+(oppRunsArr.reduce((a,b)=>a+b,0)/TOTAL).toFixed(1),oppP10:pct(oppRunsArr,0.1),oppP90:pct(oppRunsArr,0.9),
             winProb:+(myWins/TOTAL).toFixed(3),
             playerRows:makeRows(myDists,myRSum,myRbiSum),playerNames:myNames,
             oppRows:makeRows(oppDists,oppRSum,oppRbiSum),oppNames,
